@@ -150,13 +150,14 @@ function planAutonomy(state, deps = {}) {
       return { action: 'apply', strict: true };
     case 'applying':
       return { action: 'none', reason: 'applying' };
+    case 'applied_no_restart':
     case 'applied':
       if (state.collaboration?.repairOnly) {
         const continuation = normalizeAutonomy(state.autonomy).continuation;
         if (continuation) return { action: 'launch', kind: 'continue', payload: continuation };
         return { action: 'wait', reason: 'missing-continuation' };
       }
-      return { action: 'none', reason: 'applied' };
+      return { action: 'none', reason: state.status };
     case 'review_blocked':
     case 'failed':
     case 'interrupted':
@@ -233,7 +234,7 @@ function planReworkLaunch(state, deps) {
  * runner 以当前工作区独立实测（干净树 + patchHead/baselineHead 均为 HEAD 祖先）。
  */
 function continuationCheckpoint(state) {
-  if (!state || state.status !== 'applied' || !state.collaboration?.repairOnly
+  if (!state || !['applied', 'applied_no_restart'].includes(state.status) || !state.collaboration?.repairOnly
     || !state.collaboration?.checkpoint || !state.commit) return null;
   return { ...state.collaboration.checkpoint, kind: 'post_apply', patchHead: state.commit };
 }

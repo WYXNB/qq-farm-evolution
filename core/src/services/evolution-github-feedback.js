@@ -1390,7 +1390,7 @@ async function handlePublishedEvolution({ status, commit, dualAgentEnabled, main
   const cfg = readGithubFeedbackConfig(options);
   if (!cfg) return { ok: false, reason: 'disabled' };
   const dataDir = resolveDataDir(options);
-  if (!['pending_apply', 'applied'].includes(status)) return { ok: false, reason: 'not_published' };
+  if (!['pending_apply', 'applied', 'applied_no_restart'].includes(status)) return { ok: false, reason: 'not_published' };
   const revision = String(commit || '').toLowerCase();
   if (!isRevision(revision)) return { ok: false, reason: 'invalid_revision' };
   if (!batchSummary?.capturedAt) return { ok: false, reason: 'no_batch' };

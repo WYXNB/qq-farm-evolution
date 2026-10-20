@@ -33,6 +33,8 @@ const {
 const { inspectWorktree: inspectWorktreeAt } = require('./evolution-worktree');
 // 隔离任务/运行时工作区 + 私有保留源清单 + 发布门（2026-10-07 Stage C）。
 const evolutionPublish = require('./evolution-publish');
+const { inspectDeploymentImpact } = require('./evolution-deployment-impact');
+const { PREFLIGHT_REASONS } = require('./wx-update-preflight');
 const {
   normalizeAutonomy, normalizeActivityPlan, computeReworkDelayMs, autonomyTargetKey, shouldNotify, planAutonomy, continuationCheckpoint,
   NO_PROGRESS_DIAGNOSIS_ATTEMPTS,
@@ -76,7 +78,8 @@ const FAILED_RUN_RETRY_MIN_MS = 10 * 60 * 1000;
 const FAILED_RUN_RETRY_JITTER_MS = 5 * 60 * 1000;
 const PUSH_RETRY_DELAY_MS = 10 * 60 * 1000;
 const BLOCKING_STATUSES = new Set(['running', 'revising', 'pending_apply', 'applying', 'push_failed', 'privacy_blocked_local', 'review_blocked']);
-const COMPLETED_STATUSES = new Set(['pending_apply', 'no_change']);
+const COMPLETED_STATUSES = new Set(['pending_apply', 'no_change', 'applied_no_restart']);
+const APPLIED_STATUSES = new Set(['applied', 'applied_no_restart']);
 const EVOLUTION_AGENTS = new Set(['claude', 'codex']);
 const AGENT_LABELS = { claude: 'Claude', codex: 'Codex' };
 const execFileAsync = promisify(execFile);
@@ -147,6 +150,8 @@ const scheduler = createScheduler('activity_evolver');
 let deps = {};
 let running = false;
 let lastTask = '';
+let runningCommit = '';
+let runningSourceFingerprint = '';
 
 function defaultState() {
   return {
@@ -181,6 +186,8 @@ function defaultState() {
     lastRunAt: 0,
     status: 'idle', // idle | running | revising | rejected | revision_failed | pending_apply | applying | applied | push_failed | privacy_blocked | privacy_blocked_local | failed | interrupted | deferred | no_change
     summary: '',
+    deployment: null,
+    applyDeferredReason: '',
     changeSummary: '',
     privacyFindings: [],
     commit: '',
@@ -902,7 +909,7 @@ function legacyBlockedInitialFailure(state) {
 }
 
 function previousTeamFailure(state) {
-  if (state.dualAgentEnabled && state.status === 'applied' && state.collaboration?.repairOnly) {
+  if (state.dualAgentEnabled && APPLIED_STATUSES.has(state.status) && state.collaboration?.repairOnly) {
     const failure = normalizeTeamFailure(state.collaboration.lastFailure);
     return failure.recoverable ? failure : null;
   }
@@ -1460,7 +1467,7 @@ async function notify(title, content, options = {}) {
   const state = readState();
   if (state.dualAgentEnabled === true) {
     if (options.finalApproved !== true || state.collaboration?.repairOnly
-      || !['no_change', 'pending_apply', 'applied'].includes(state.status)
+      || !['no_change', 'pending_apply', 'applied', 'applied_no_restart'].includes(state.status)
       || !isTeamResultApproved(state.collaboration, state.commit || gitHead())) return;
   }
   // 直推默认飞书 webhook；store 配了非飞书的 webhook 则改走 pushoo
@@ -1522,7 +1529,7 @@ function getCapturedActivityPlan(current) {
 function getActivityReviewDate(state) {
   const reviewedAt = Number(normalizeEvolutionMemory(state.evolutionMemory).activity?.reviewedAt) || 0;
   if (reviewedAt > 0) return getLocalDateKey(reviewedAt);
-  if (state.lastTask === 'activity' && !['idle', 'no_change', 'pending_apply', 'applied'].includes(state.status)) return '';
+  if (state.lastTask === 'activity' && !['idle', 'no_change', 'pending_apply', 'applied', 'applied_no_restart'].includes(state.status)) return '';
   return normalizeDateKey(state.lastEvolveDate);
 }
 
@@ -2189,8 +2196,8 @@ function checkAndMaybeEvolve(report) {
 
 function pendingActivityEvent(state) {
   if (state.autonomousEvolutionEnabled !== true || state.evolutionEnabled === false || running
-    || state.activeRun || !['idle', 'no_change', 'applied'].includes(state.status)
-    || (state.commit && state.status !== 'applied') || state.privacyBlockedCommit) return null;
+    || state.activeRun || !['idle', 'no_change', 'applied', 'applied_no_restart'].includes(state.status)
+    || (state.commit && !APPLIED_STATUSES.has(state.status)) || state.privacyBlockedCommit) return null;
   if (planAutonomy(state, autonomyDeps()).action !== 'none') return null;
   const report = (deps.readLatestReport || readLatestReport)();
   if (!report || report.status === 'unavailable' || report.online?.available === false) return null;
@@ -2245,7 +2252,7 @@ function schedulePendingActivityEvent(state) {
       if (failed.lastTask === 'activity' && failed.lastRunAutomatic === true
         && failed.autonomy?.activityPlanDigest === activityPlanDigest
         && !failed.activeRun && !failed.commit && !failed.privacyBlockedCommit
-        && ['idle', 'no_change', 'applied', 'failed', 'deferred', 'running', 'interrupted'].includes(failed.status)) {
+        && ['idle', 'no_change', 'applied', 'applied_no_restart', 'failed', 'deferred', 'running', 'interrupted'].includes(failed.status)) {
         running = false;
         failed.status = 'failed';
         autonomyDefer(failed, `launch:${result.reason || 'failed'}`,
@@ -2513,6 +2520,24 @@ function applyEvolution(source = 'manual') {
   if (!state.commit || !headNow || !auditedIncluded || worktreeChanges(applyRoot)) {
     return { ok: false, error: '待应用提交或工作区已变化，请先核对，当前未部署任何改动' };
   }
+  try {
+    const impact = (deps.inspectDeploymentImpact || inspectDeploymentImpact)(REPO_ROOT, applyRoot);
+    if (impact.equivalent && applyRoot !== REPO_ROOT && runningSourceFingerprint
+      && logicSnapshot(REPO_ROOT).fingerprint === runningSourceFingerprint
+      && gitHead(REPO_ROOT) === runningCommit) {
+      const gate = autonomousApplyValidationGate(applyRoot);
+      if (gate) return { ok: false, error: `候选内容验证未通过（${gate}），未结算应用` };
+      state.status = 'applied_no_restart';
+      state.applyDeferredReason = '';
+      state.deployment = { kind: 'no_restart', commit: state.commit,
+        runningCommit: runningCommit || gitHead(REPO_ROOT), runningPid: process.pid,
+        productionFingerprint: impact.productionFingerprint, completedAt: Date.now() };
+      state.summary = '本次仅测试或文档变更，运行内容一致，已完成应用且保留现有游戏连接';
+      writeState(state);
+      void notify('农场 bot 进化已应用', [state.summary, state.changeSummary].filter(Boolean).join('\n'), { finalApproved: true });
+      return { ok: true, commit: state.commit, restarted: false };
+    }
+  } catch { return { ok: false, error: '无法核对当前运行内容与候选，未部署任何改动' }; }
   if (!fs.existsSync(APPLY_PROCESS_SCRIPT)) {
     return { ok: false, error: `缺少应用进程脚本 ${APPLY_PROCESS_SCRIPT}` };
   }
@@ -2562,6 +2587,8 @@ function applyEvolution(source = 'manual') {
     return { ok: false, error: '无法读取当前 Bot 进程的启动身份（/proc starttime），已取消重启' };
   }
   state.status = 'applying';
+  state.commit = headNow;
+  state.applyDeferredReason = '';
   // 应用来源持久落盘：重启收口据此选择「严格同提交」（自主）或「祖先包含」（人工）
   // 的 HEAD 核对口径；helper 的自主停服前复核只在自主来源时启用。
   state.applyingSource = autonomous ? 'autonomous' : 'manual';
@@ -2569,6 +2596,7 @@ function applyEvolution(source = 'manual') {
   writeState(state);
   // 应用 helper 本身是 Bot 后代：它只停已证明的 Bot 子树并排除自身祖先分支，
   // 结构化 spawn 重启 + 0600 应用回执 + 端口就绪确认（见 evolution-apply-process.js）。
+  const applyLaunchedAt = Date.now();
   const child = spawn(process.execPath, [
     APPLY_PROCESS_SCRIPT,
     '--bot-pid', String(process.pid),
@@ -2583,9 +2611,10 @@ function applyEvolution(source = 'manual') {
   ], {
     cwd: REPO_ROOT,
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     env: { ...process.env, FARM_TMUX_TARGET: tmuxTarget, FARM_NODE_BIN_DIR: path.dirname(process.execPath), FARM_EVOLUTION_COMMIT: headNow },
   });
+  bindWxRestartIpc(child, { targetCommit: headNow, oldPid: process.pid, oldStartTicks: botStarttime });
   child.once('error', error => {
     const failed = readState();
     if (failed.status !== 'applying') return;
@@ -2598,11 +2627,59 @@ function applyEvolution(source = 'manual') {
     const failed = readState();
     if (failed.status !== 'applying' || failed.commit !== state.commit) return;
     failed.status = 'pending_apply';
-    failed.summary = '应用准备失败，待应用提交已保留；请检查本机应用构建日志后重试';
+    try {
+      const attempt = JSON.parse(fs.readFileSync(path.join(path.dirname(STATE_FILE), 'evolution-apply-attempt.json'), 'utf8'));
+      if (attempt.expectedHead === state.commit && attempt.oldPid === process.pid && attempt.failedAt >= applyLaunchedAt
+        && Object.hasOwn(PREFLIGHT_REASONS, attempt.reasonCode)) failed.applyDeferredReason = PREFLIGHT_REASONS[attempt.reasonCode];
+    } catch { /* A failed launch may not have produced a helper attempt. */ }
+    failed.summary = failed.applyDeferredReason || '应用准备失败，待应用提交已保留；请检查本机应用构建日志后重试';
     autonomyDefer(failed, `apply-launch:${state.commit}`, failed.summary);
   });
   child.unref();
   return { ok: true, commit: state.commit };
+}
+
+function bindWxRestartIpc(child, expected) {
+  let preparation = null;
+  let active = true;
+  let ownedNonce = '';
+  child.once('exit', () => { active = false; });
+  child.once('disconnect', () => { active = false; });
+  child.on('message', async message => {
+    if (message?.type === 'wx_restart_cancel' && message.nonce === ownedNonce
+      && message.targetCommit === expected.targetCommit) { active = false; return; }
+    if (!message || message.type !== 'wx_restart_request'
+      || message.targetCommit !== expected.targetCommit || message.oldPid !== expected.oldPid
+      || message.oldStartTicks !== expected.oldStartTicks || !/^[a-z0-9-]{16,128}$/i.test(message.nonce || '')) return;
+    const reply = { type: 'wx_restart_response', action: message.action, requestId: message.requestId,
+      targetCommit: message.targetCommit, nonce: message.nonce, ok: false, reasonCode: 'rejected' };
+    const current = () => {
+      const state = readState();
+      return active && state.status === 'applying' && state.commit === expected.targetCommit
+        && (state.applyingSource !== 'autonomous' || state.autonomousEvolutionEnabled === true);
+    };
+    try {
+      if (!current()) throw new Error('stale_application');
+      if (message.action === 'prepare' && !preparation && typeof deps.prepareWxRestart === 'function') {
+        ownedNonce = message.nonce;
+        preparation = Promise.resolve(deps.prepareWxRestart({ ...message, guard: current }));
+        const result = await preparation;
+        if (current() && result?.ok === true) Object.assign(reply, { ok: true, handoff: result.handoff });
+        else if (Object.hasOwn(PREFLIGHT_REASONS, result?.reasonCode)) reply.reasonCode = result.reasonCode;
+      } else if (message.action === 'validate' && message.nonce === ownedNonce && preparation && typeof deps.validateWxRestart === 'function') {
+        const result = await preparation;
+        reply.ok = current() && result?.ok === true
+          && JSON.stringify(result.handoff) === JSON.stringify(message.handoff)
+          && deps.validateWxRestart(result.handoff) === true;
+      }
+    } catch { /* A failed preflight always retains the current process. */ }
+    if (!reply.ok && current()) {
+      const state = readState();
+      state.applyDeferredReason = PREFLIGHT_REASONS[reply.reasonCode] || PREFLIGHT_REASONS.rejected;
+      writeState(state);
+    }
+    if (child.connected) { try { child.send(reply); } catch { /* helper aborts on disconnect */ } }
+  });
 }
 
 /** 计算下一次每日进化窗口内的随机触发时刻（北京时间 00:00-01:00） */
@@ -2877,9 +2954,11 @@ async function runAutonomyStep() {
           `远端 origin/main 与待应用提交不一致，自主应用暂缓（不推送、不改仓库），稍后自动重查`);
         return;
       }
-      const result = applyEvolution('autonomous');
+      const result = await applyEvolution('autonomous');
       if (result.ok === false) {
-        autonomyDefer(latest, 'apply-rejected', `自主应用未启动：${result.error}`);
+        const rejected = readState();
+        if (rejected.status === 'pending_apply' && rejected.commit === state.commit)
+          autonomyDefer(rejected, 'apply-rejected', `自主应用未启动：${result.error}`);
       }
       return; // 成功 = applying，重启后由启动收口/限时回执确认/续接接管
     }
@@ -3422,7 +3501,7 @@ function reconcileLostCollaboration(state, options = {}) {
  * 进化运行。未启用反馈路由时该调用是纯 no-op（disabled）。
  */
 function resumePublishedFeedback(state) {
-  if (!state || !['pending_apply', 'applied'].includes(state.status)) return;
+  if (!state || !['pending_apply', 'applied', 'applied_no_restart'].includes(state.status)) return;
   if (!state.commit || !state.githubFeedbackBatch) return;
   const journal = state.collaboration;
   // repairOnly 轮没有原巡检结论（与 finalize 同口径），不得作为批准依据。
@@ -3441,6 +3520,10 @@ function resumePublishedFeedback(state) {
 
 function startActivityEvolver(options = {}) {
   deps = options;
+  if (!runningCommit) runningCommit = gitHead();
+  if (!runningSourceFingerprint) {
+    try { runningSourceFingerprint = logicSnapshot(REPO_ROOT).fingerprint; } catch { /* Restart remains required. */ }
+  }
   scheduler.clearAll();
 
   // apply-evolution.sh 只有在旧进程退出后才能生效，新进程启动就是可靠的已应用边界。
@@ -3485,7 +3568,7 @@ function settleDailyReview(state, options = {}) {
   const journal = state.collaboration;
   const head = options.head || gitHead();
   const expectedAgent = state.lastAgent || state.mainAgent;
-  if (!['no_change', 'pending_apply', 'applied'].includes(state.status) || !state.dualAgentEnabled
+  if (!['no_change', 'pending_apply', 'applied', 'applied_no_restart'].includes(state.status) || !state.dualAgentEnabled
       || journal?.repairOnly || head !== (state.commit || head)
       || (journal?.reviewedBy && journal.reviewedBy !== expectedAgent)
       || !isTeamResultApproved(journal, head)) return false;
@@ -3535,6 +3618,8 @@ function getEvolveState() {
     running,
     lastTask,
     ...publicFields,
+    runningCommit: runningCommit || (runningCommit = gitHead()),
+    runningPid: process.pid,
     activeRun: _activeRun ? publicActiveRun : null,
     // 面板需要的自主进度：计数与下次动作时刻；不含 originalPrompt/批次/凭据。
     autonomy: state.autonomy ? {
@@ -3754,6 +3839,8 @@ module.exports = {
   runEvolutionNow,
   retryReviewBlockedEvolution,
   applyEvolution,
+  inspectDeploymentImpact,
+  bindWxRestartIpc,
   nextSafetyRunAt,
   getLocalDateKey,
   isAutomaticQuotaUsed,

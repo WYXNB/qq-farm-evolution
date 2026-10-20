@@ -174,7 +174,10 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
     // 每次扫描登记新/结束活动；自主开启时空闲后立即进化，同批去重，不占每日名额。
     onReport: report => activityEvolver.checkAndMaybeEvolve(report),
   });
-  activityEvolver.startActivityEvolver({ store });
+  activityEvolver.startActivityEvolver({ store,
+    prepareWxRestart: input => provider?.prepareWxRestart?.(input),
+    validateWxRestart: handoff => provider?.validateWxRestart?.(handoff) === true,
+  });
 
   app.get('/api/activity/update/status', requireAdminToken, (req, res) => {
     res.json({
@@ -273,10 +276,14 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
     res.json({ ok: result.ok, ...result, evolve: activityEvolver.getEvolveState() });
   });
 
-  app.post('/api/activity/update/apply', requireAdminToken, (req, res) => {
-    const result = activityEvolver.applyEvolution();
-    if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
-    res.json({ ok: true, evolve: activityEvolver.getEvolveState() });
+  app.post('/api/activity/update/apply', requireAdminToken, async (req, res) => {
+    try {
+      const result = await activityEvolver.applyEvolution();
+      if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+      return res.json({ ok: true, evolve: activityEvolver.getEvolveState() });
+    } catch {
+      return res.status(500).json({ ok: false, error: '应用准备失败，当前服务保持运行' });
+    }
   });
 }
 

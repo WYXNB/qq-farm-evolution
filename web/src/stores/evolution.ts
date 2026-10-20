@@ -28,6 +28,10 @@ export interface EvolutionState {
   autonomy?: { reworkAttempts: number, applyAttempts: number, nextReworkAt: number } | null
   automaticPolicy?: string
   summary?: string
+  applyDeferredReason?: string
+  deployment?: { kind: string, commit: string, runningCommit: string, runningPid: number, completedAt: number } | null
+  runningCommit?: string
+  runningPid?: number
   commit?: string
   lastRunAt?: number
   lastTask?: string

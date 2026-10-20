@@ -156,6 +156,19 @@ test('更新的独立活动完成日优先，不能被更旧综合巡检覆盖',
   unmount(h);
 });
 
+test('无需重启显示真实运行版本与完成日期，延期原因保持可见', async () => {
+  const h = mountPanel({ status: 'applied_no_restart', lastTask: 'activity', lastEvolveDate: '2026-10-20',
+    commit: 'aaaaaaaaaaaaaaaa', runningCommit: 'bbbbbbbbbbbbbbbb', runningPid: 12345 });
+  await settled(h);
+  assert.match(textOf(h.root), /运行内容一致，无需重启/);
+  assert.match(textOf(h.root), /实际运行：bbbbbbbb · PID 12345/);
+  assert.match(textOf(h.root), /最近完成：2026-10-20/);
+  h.evolve.value = { status: 'pending_apply', applyDeferredReason: '账号状态变化，现有连接已保留' };
+  await vue.nextTick();
+  assert.match(textOf(h.root), /账号状态变化，现有连接已保留/);
+  unmount(h);
+});
+
 test('进行中或验收失败的独立活动启动日不冒充完成，保留最近真实综合复核', async () => {
   for (const status of ['running', 'review_blocked', 'failed']) {
     const h = mountPanel({ status, lastTask: 'activity', lastEvolveDate: '2026-10-10', lastActivityReviewDate: '2026-10-09' });

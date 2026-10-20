@@ -144,6 +144,7 @@ const EVOLVE_STATUS_LABELS: Record<string, string> = {
   pending_apply: '待确认应用',
   applying: '正在重启应用…',
   applied: '已应用',
+  applied_no_restart: '运行内容一致，无需重启',
   push_failed: 'GitHub 推送失败，禁止应用',
   failed: '执行失败',
   interrupted: '已中止，可重试',
@@ -165,7 +166,7 @@ function completedDate(value?: string) {
 const standaloneActivityDate = computed(() => {
   const state = evolve.value
   // 独立活动轮在启动时也写日期；未验收的本轮不能冒充已完成记录。
-  if (state?.lastTask === 'activity' && !['', 'idle', 'applied', 'no_change', 'pending_apply'].includes(state.status || ''))
+  if (state?.lastTask === 'activity' && !['', 'idle', 'applied', 'applied_no_restart', 'no_change', 'pending_apply'].includes(state.status || ''))
     return ''
   return completedDate(state?.lastEvolveDate)
 })
@@ -647,7 +648,7 @@ async function applyEvolve() {
     if (!data.ok)
       throw new Error(data.error || '应用进化失败')
     syncEvolveState(data.evolve)
-    toast.warning('正在重启应用进化，面板稍等片刻恢复')
+    toast.warning('正在应用进化，面板将显示实际应用结果')
   }
   catch (err: any) {
     error.value = err?.response?.data?.error || err.message || '应用进化失败'
@@ -825,6 +826,12 @@ onUnmounted(() => evolutionStore.stopPolling())
             状态：{{ evolveStatusLabel }}
             <span v-if="evolve?.commit">（提交 {{ String(evolve.commit).slice(0, 8) }}）</span>
           </div>
+          <div v-if="evolve?.runningCommit" class="mt-1 text-xs text-purple-800 dark:text-purple-300">
+            实际运行：{{ evolve.runningCommit.slice(0, 8) }} · PID {{ evolve.runningPid }}
+          </div>
+          <p v-if="evolve?.applyDeferredReason && evolve.status === 'pending_apply'" class="mt-1 text-xs text-amber-700">
+            {{ evolve.applyDeferredReason }}
+          </p>
           <p v-if="evolve?.summary" class="mt-1 text-xs break-all text-purple-700 dark:text-purple-300">
             {{ evolve.summary }}
           </p>
@@ -877,7 +884,7 @@ onUnmounted(() => evolutionStore.stopPolling())
           :disabled="evolve?.status !== 'pending_apply'"
           @click="applyEvolve"
         >
-          {{ applying ? '正在重启…' : '应用进化（重启生效）' }}
+          {{ applying ? '正在应用…' : '应用进化' }}
         </button>
         <button
           v-if="evolve?.status === 'review_blocked'"
@@ -914,7 +921,7 @@ onUnmounted(() => evolutionStore.stopPolling())
             : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-400'"
           :disabled="togglingAutonomy"
           :title="evolve?.autonomousEvolutionEnabled === true
-            ? '自主进化运行中：失败自动返工，通过的改动自动应用并重启生效；点击关闭恢复人工确认应用'
+            ? '自主进化运行中：失败自动返工，通过的改动自动应用，运行内容一致时保留当前连接；点击关闭恢复人工确认应用'
             : '自主进化已关闭，点击开启：通过的改动自动应用生效、失败自动返工重试（默认关闭）'"
           @click="toggleAutonomousEvolution"
         >
