@@ -27,6 +27,7 @@ function repo(name) {
   write(`${name}/core/src/runtime.js`, 'module.exports=1;');
   write(`${name}/core/test/example.test.js`, 'old test');
   write(`${name}/docs/guide.md`, 'old guide');
+  write(`${name}/docs/CHANGELOG.md`, 'old release notes');
   write(`${name}/core/package.json`, '{}');
   const git = args => execFileSync('git', args, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
   git(['init', '-q']); git(['add', '.']);
@@ -37,6 +38,10 @@ test('exact production bytes and modes preserve connections for test/docs-only u
   const left = repo('prior'); const right = repo('next');
   write('next/core/test/example.test.js', 'new test'); write('next/docs/guide.md', 'new guide');
   assert.equal(inspectDeploymentImpact(left, right).equivalent, true);
+  write('next/docs/CHANGELOG.md', 'new release notes');
+  assert.equal(inspectDeploymentImpact(left, right).equivalent, false,
+    '单改前端实际导入的更新记录必须重新交付资源，不能误报无需部署');
+  write('next/docs/CHANGELOG.md', 'old release notes');
   for (const file of ['core/src/runtime.js', 'core/package.json']) {
     const original = fs.readFileSync(path.join(right, file));
     write(`next/${file}`, 'changed');

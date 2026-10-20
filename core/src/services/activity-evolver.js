@@ -35,6 +35,7 @@ const { inspectWorktree: inspectWorktreeAt } = require('./evolution-worktree');
 const evolutionPublish = require('./evolution-publish');
 const { inspectDeploymentImpact } = require('./evolution-deployment-impact');
 const { PREFLIGHT_REASONS } = require('./wx-update-preflight');
+const { buildOfficialAnnouncementCacheContext } = require('./evolution-announcement-context');
 const {
   normalizeAutonomy, normalizeActivityPlan, computeReworkDelayMs, autonomyTargetKey, shouldNotify, planAutonomy, continuationCheckpoint,
   NO_PROGRESS_DIAGNOSIS_ATTEMPTS,
@@ -1271,8 +1272,10 @@ ${FULL_HANDOFF_MANDATE}
     guardrails,
     privacyGuardrail,
     buildPublicReferenceGuidance(),
+    buildOfficialAnnouncementCacheContext(path.dirname(STATE_FILE)),
     buildRevisionContinuity(revisionContext),
     '【范围与授权】用户已经明确批准并上线的功能属于基线；不能仅因本轮未重新找到历史材料就删除、禁用或改成只读。自动巡检应在保留能力的前提下修复有证据的局部问题，不得擅自反转用户授权。发布隐私检查、凭据保护与不试探未知协议的边界仍必须执行。',
+    '【问题驱动与功能记录】按已收集问题持续修正并回归，活动轮核对当前活动与官方公告变化，优先借鉴近期更新且超过20星项目的实际玩法代码。已交付功能按 docs/CHANGELOG.md 的“日期 · 功能”和简明要点更新详细记录，保留历史；未验证或未实现的能力不得写成已完成，内部修复过程不逐轮堆入功能记录。',
     instruction ? `【用户保存的修改要求（在用户授权范围内执行）】\n${redactExternalText(instruction)}` : '',
   ].filter(Boolean).join('\n\n');
 }
@@ -1378,7 +1381,7 @@ function buildCachedActivityContext({ activityPlan = null, pendingActivity = nul
   const ids = list => (Array.isArray(list) ? list : []).map(Number).filter(id => id > 0).join('、') || '无';
   const lines = [
     CACHED_ACTIVITY_CONTEXT_HEADER,
-    `- 最新活动扫描报告：${reportAvailable ? '可用；先读取现成 core/data/activity-update-report.json，不为本轮新增任何游戏请求' : plan ? '当前不可用；沿用原任务已捕获的活动计划与证据指纹，核对原本机已有证据，材料不足保留待处理，不新增游戏请求' : '不可用；本轮只完成安全巡检部分，不为了等待报告重试'}`,
+    `- 最新活动扫描报告：${reportAvailable ? '可用；先读取现成 core/data/activity-update-report.json，缓存摘要构造器不新增任何游戏请求' : plan ? '当前不可用；沿用原任务已捕获的活动计划与证据指纹，核对原本机已有证据，材料不足保留待处理，不新增游戏请求' : '不可用；本轮只完成安全巡检部分，不为了等待报告重试'}`,
   ];
   if (plan) {
     lines.push(`- 待处理新活动 ID：${ids(plan.newUnknown)}`);
@@ -1395,7 +1398,7 @@ function buildCachedActivityContext({ activityPlan = null, pendingActivity = nul
   if (pending) {
     lines.push(`- 已知未决项（此前扫描登记、尚未处理）：新活动 ${ids(pending.newUnknown)}；已结束 ${ids(pending.newEnded)}；随本轮综合巡检一并处理`);
   }
-  lines.push('- 活动结论与证据一律以现成扫描报告和本摘要为准；不得为本轮发起额外游戏请求，不得把原始响应、账号或地址写进任何文件。');
+  lines.push('- 活动结论先以现成扫描报告及公告正文核对；实施工具不得额外发起游戏请求。缺少当前公告正文时，仅有现成授权上下文的主 Agent/协调进程可按官方公告规则进行一次有界只读，不能新增轮询或枚举；不把原始响应、账号或地址写进交接与公开文件。');
   return lines.join('\n');
 }
 
