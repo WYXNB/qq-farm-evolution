@@ -16,6 +16,17 @@ function mountPanel(activity, query = queries()) {
 const button = (root, label) => buttonsOf(root).find(b => textOf(b).trim() === label);
 function setModel(root, label, value) { const node = findAll(root, n => n.props['aria-label'] === label)[0]; assert.ok(node, label); node.props['onUpdate:modelValue'](value); }
 
+test('candidate refresh, errors, duration and selection changes revoke hire confirmation before a write', async () => {
+  for (const mutate of [q => { q.hireList.loading = true; }, q => { q.hireList.error = 'read failed'; }, q => { q.hireList.data = { durationId: 1, robots: [] }; }]) {
+    const q = vue.reactive(queries()); q.shop.data = { slotAvailabilityKnown: true, employeeSlotCount: 1, freeSlotIndexes: [0] };
+    q.hireList.data = { durationId: 1, robots: [{ gid: '9101', name: '合成员工' }] };
+    const { root, events } = mountPanel(snapshot(), q); setModel(root, '雇佣候选', '9101'); await vue.nextTick();
+    click(button(root, '雇佣所选员工')); await vue.nextTick(); assert.equal(findAll(root, n => n.props.role === 'dialog').length, 1);
+    mutate(q); await vue.nextTick(); assert.equal(findAll(root, n => n.props.role === 'dialog').length, 0);
+    assert.equal(button(root, '雇佣所选员工').props.disabled, true); assert.equal(events.length, 0);
+  }
+});
+
 test('真实面板渲染全部说明玩法；null/缺省数值均不崩溃、不伪造0', () => {
   for (const value of [null, snapshot(), snapshot({ inventory: { available: false }, growthFund: {}, shareReward: {} })]) {
     const { root } = mountPanel(value);

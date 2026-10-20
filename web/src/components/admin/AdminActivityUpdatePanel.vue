@@ -314,12 +314,12 @@ interface ActivityRuleInsight {
 }
 
 const ACTIVITY_RULE_INSIGHT_DEFINITIONS: Array<Omit<ActivityRuleInsight, 'evidence'> & { pattern: RegExp }> = [
-  { key: 'milk-tea-shop', title: '奶茶开店、升级与收银台', description: '已接入奶茶专属面板、摘要与显式查询；开店、改名、升级、领取仅用户手动确认。', kind: 'gameplay', pattern: /开店营业|升级小店|收银台/ },
+  { key: 'milk-tea-shop', title: '奶茶开店、升级与收银台', description: '已接入奶茶专属面板、摘要与显式查询；开店、改名、升级需确认，收银台可手动领取或随自动任务在满额时领取。', kind: 'gameplay', pattern: /开店营业|升级小店|收银台/ },
   { key: 'milk-tea-workshop', title: '奶茶工坊与果实加工', description: '已接入配方与背包果实显式查询、唯一条目和锁定校验；本期七种普通森野作物单格、黄金芽四格和种子、果实专属图已核验；真正未登记的作物仍保留未知占地。', kind: 'gameplay', pattern: /种植加工|奶茶工坊/ },
   { key: 'milk-tea-hire', title: '雇佣、特长、班次与互动', description: '已接入候选、店铺空槽和我的工作显式查询；逐项费用确认与操作前资格重读，部分失败据实报告。', kind: 'gameplay', pattern: /雇佣好友|每班.*互动/ },
   { key: 'milk-tea-sales', title: '宣传喇叭、好友排行与销量日志', description: '已接入喇叭手动确认、指定页排行和指定日销量查询；不轮询、不自动翻页。', kind: 'gameplay', pattern: /宣传加速|宣传喇叭|排行榜|销量日志/ },
-  { key: 'milk-tea-fund', title: '成长基金与快乐值奖励', description: '已接入已解锁基金、每日快乐值与档位手动领取；基金付费解锁、分享上报及好友链接由官方客户端完成。', kind: 'gameplay', pattern: /成长基金|累计快乐值|人气装饰/ },
-  { key: 'milk-tea-end', title: '奶茶营业期、结算期与最终截止', description: '结算期停止营业动作和专属种子购买；最终截止后停止新增玩法读取与写入，页面到期零网络撤下。自动循环尚缺官方自然成功样本，不接自动任务。', kind: 'warning', pattern: /48小时结算期|未领收益通过邮件补发|停止自动营业/ },
+  { key: 'milk-tea-fund', title: '成长基金与快乐值奖励', description: '已接入已解锁基金、每日快乐值、首次分享与档位领取；自动任务可领取合格快乐值奖励，基金付费解锁及好友链接仍在官方客户端完成。', kind: 'gameplay', pattern: /成长基金|累计快乐值|人气装饰/ },
+  { key: 'milk-tea-end', title: '奶茶营业期、结算期与最终截止', description: '结算期停止营业动作和专属种子购买；最终截止后停止新增玩法读取与写入，页面到期零网络撤下。自动任务按新查询确认收银台满额后领取；预计时间只用于到点复查。', kind: 'warning', pattern: /48小时结算期|未领收益通过邮件补发|停止自动营业/ },
 
   { key: 'bear-grow', title: '比熊领养与投喂成长', description: '已接入流程卡；投喂、领养与领取永久比熊已开放面板手动操作，成长进度实时状态当前快照未展示、由操作前校验读取，元气糕库存随背包读取展示。', kind: 'gameplay', pattern: /投喂.*培育比熊|投喂.*比熊幼崽/ },
   { key: 'bear-care', title: '看护与比熊变异', description: '已接入看护条件；商城与玩法说明的产量/售价差异单独提示，当前看护状态待确认。', kind: 'gameplay', pattern: /比熊处于看护状态/ },
@@ -1016,7 +1016,7 @@ onUnmounted(() => evolutionStore.stopPolling())
       >
         <h4 class="font-semibold">活动适配复核</h4>
         <p class="mt-2 text-sm">
-          本次新活动候选组 {{ candidateGroupCount }} 个，当前已登记活动复核 {{ currentReviewGroupCount }} 个。活动说明用于识别玩法和 UI 要求，手动操作按现有编码和当前下发交叉核验；自动循环仍须官方自然成功样本。
+          本次新活动候选组 {{ candidateGroupCount }} 个，当前已登记活动复核 {{ currentReviewGroupCount }} 个。活动说明用于识别玩法和 UI 要求，操作按已证编码和当前状态核验；免费奖励自动领取另核对资格、时机和重复保护，不以实际领取制造自然成功样本。
         </p>
         <div class="mt-3 space-y-2">
           <div v-for="group in discoveredGroups" :key="group.id" class="rounded-lg bg-white/70 px-3 py-2 dark:bg-gray-900/40">

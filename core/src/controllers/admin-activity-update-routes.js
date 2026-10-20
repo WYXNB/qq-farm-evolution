@@ -149,9 +149,15 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
       const bag = await provider.getBag(account.id);
       if (bag?.seedRecognition) seedRecognition = bag.seedRecognition;
     } catch { /* 无库存证据不等于没有识别缺口。 */ }
+    let festivalCalendar = null;
+    if (typeof provider.getSolarCalendar === 'function') {
+      try { festivalCalendar = { available: true, ...await provider.getSolarCalendar(account.id) }; }
+      catch { festivalCalendar = { available: false, error: '节日签到读取失败，不能据此认定没有活动' }; }
+    }
     return {
       available: true,
       seedRecognition,
+      festivalCalendar,
       accountName: account.name || account.nick || '在线账号',
       scannedAt: Date.now(),
       activities,

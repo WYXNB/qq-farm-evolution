@@ -2,6 +2,7 @@
 import type { MilkTeaQueryKind } from '@/stores/activity'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import FestivalSignInPanel from '@/components/activity/FestivalSignInPanel.vue'
 // 上一期 BearActivityPanel 已退役；只保留历史迁移定位，默认页面仅挂载当前奶茶面板。
 import MilkTeaActivityPanel from '@/components/activity/MilkTeaActivityPanel.vue'
 import AdminActivityUpdatePanel from '@/components/admin/AdminActivityUpdatePanel.vue'
@@ -182,6 +183,10 @@ onMounted(() => {
       请先选择账号，再查看活动数据。
     </div>
     <template v-else>
+      <nav class="activity-nav" aria-label="活动快速导航">
+        <a v-if="!milkTeaRetired" href="#milk-shop">奶茶小店</a>
+        <a href="#festival-sign-in">节日签到与节令日历</a>
+      </nav>
       <div v-if="milkTeaError && !milkTeaRetired" class="act-alert act-alert-error" role="alert">
         {{ milkTeaError }}
       </div>
@@ -192,7 +197,7 @@ onMounted(() => {
               一键领取
             </h2>
             <p class="mt-1 text-xs text-gray-500 leading-5 dark:text-gray-400">
-              仅领取奶茶活动的每日快乐值与合格档位奖励；每项领取前重新校验资格。
+              领取奶茶活动的每日快乐值、首次分享与合格档位奖励；每项领取前重新校验资格。
             </p>
           </div>
           <div class="act-actions">
@@ -232,8 +237,9 @@ onMounted(() => {
         </ul>
       </section>
       <MilkTeaActivityPanel v-if="!milkTeaRetired" :key="String(currentAccountId)" :activity="milkTeaActivity" :loading="milkTeaLoading" :operating="milkTeaOperating || (claimAllRunning ? 'claimAll' : '')" :queries="milkTeaQueries" @refresh="refreshMilkTea" @query="queryMilkTea" @operate="operateMilkTea" />
+      <FestivalSignInPanel :key="`festival-${currentAccountId}`" :account-id="String(currentAccountId)" />
       <p v-if="!hasVisibleActivity" class="rounded-lg bg-white p-8 text-center text-sm text-gray-500 dark:bg-gray-800">
-        暂无进行中的活动。
+        当前奶茶活动已结束；节日签到仍可在上方独立查询。
       </p>
       <div v-if="retiredKinds.length" class="text-sm text-gray-500 dark:text-gray-400">
         <button
@@ -300,6 +306,22 @@ onMounted(() => {
 <style scoped>
 .activity-page {
   min-width: 0;
+}
+.activity-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.activity-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--surface-border, #dbe3ec);
+  border-radius: 9px;
+  color: inherit;
+  background: var(--surface-1, #fff);
+  font-size: 13px;
 }
 .activity-page :deep(button) {
   min-height: 42px;
