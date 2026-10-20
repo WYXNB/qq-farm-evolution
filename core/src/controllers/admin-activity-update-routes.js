@@ -176,7 +176,8 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
   });
   activityEvolver.startActivityEvolver({ store,
     prepareWxRestart: input => provider?.prepareWxRestart?.(input),
-    validateWxRestart: handoff => provider?.validateWxRestart?.(handoff) === true,
+    validateWxRestart: async handoff => await provider?.validateWxRestart?.(handoff) === true,
+    cancelWxRestart: input => provider?.cancelWxRestart?.(input),
   });
 
   app.get('/api/activity/update/status', requireAdminToken, (req, res) => {

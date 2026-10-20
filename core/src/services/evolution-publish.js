@@ -537,6 +537,10 @@ function pruneTaskWorkspace(repoRoot, provenance, options = {}) {
   if (!provenance?.taskRoot) return false;
   const verify = verifyTaskWorkspace(repoRoot, provenance, options);
   if (!verify.ok) return false;
+  try {
+    const dataDir = options.dataDir || require('../config/runtime-paths').getDataDir();
+    if (require('../runtime/session-update').pinnedSessionRoots(dataDir).has(path.resolve(provenance.taskRoot))) return false;
+  } catch { return false; }
   const inspected = inspectWorktree(provenance.taskRoot, { env: options.env });
   if (inspected.dirty || inspected.files.length) return false;
   try {

@@ -131,10 +131,10 @@ test('helper preparation timeout/disconnect/rejection never grants stopping perm
 
 test('helper cancellation and exit revoke the preparation guard before delayed work can continue', async () => {
   for (const event of ['exit', 'disconnect', 'cancel']) {
-    const f = evolverFixture(); let resolve; let guard;
+    const f = evolverFixture(); let resolve; let guard; const released = [];
     f.access.configure({ prepareWxRestart: input => {
       guard = input.guard; return new Promise(done => { resolve = done; });
-    } });
+    }, cancelWxRestart: request => released.push(request.nonce) });
     f.access.writeState({ status: 'applying', commit: head });
     const child = new EventEmitter(); child.connected = true; const replies = []; child.send = reply => replies.push(reply);
     assert.equal(typeof f.service.bindWxRestartIpc, 'function');
@@ -146,6 +146,7 @@ test('helper cancellation and exit revoke the preparation guard before delayed w
     if (event === 'cancel') child.emit('message', { ...message, type: 'wx_restart_cancel' });
     else child.emit(event);
     assert.equal(guard(), false);
+    assert.ok(released.includes(message.nonce), 'cancellation reaches the creator immediately, before delayed preparation settles');
     resolve({ ok: true, handoff: { code: 'undelivered' } });
     await new Promise(done => setImmediate(done));
     assert.equal(replies.every(r => r.ok === false && !r.handoff), true);

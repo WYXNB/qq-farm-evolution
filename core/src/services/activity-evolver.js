@@ -999,6 +999,8 @@ function readApplyReceipt(dataDir = path.dirname(STATE_FILE)) {
       adminPort: Math.max(0, Math.floor(Number(value.adminPort) || 0)),
       startedAt: Math.max(0, Math.floor(Number(value.startedAt) || 0)),
       readyAt: Math.max(0, Math.floor(Number(value.readyAt) || 0)),
+      sessionPreservation: { required: value.sessionPreservation?.required === true,
+        verified: value.sessionPreservation?.verified === true },
       // 隔离候选回执字段（B3）必须保留：重启收口据此复核运行时根/源内容指纹/
       // 保留摘要——丢弃这些字段会让「记录里有 runtimeRoot」退化成唯一证据。
       runtimeRoot: String(value.runtimeRoot || '').trim().slice(0, 1000),
@@ -1062,7 +1064,8 @@ function markEvolutionAppliedAfterRestart(value) {
   const identityOk = !!(receipt && receipt.expectedHead && receipt.expectedHead === state.commit
     && receipt.newPid && receipt.newPid === process.pid
     && selfStart && receipt.newStarttime === selfStart);
-  if (identityOk && receipt.phase === 'ready') {
+  if (identityOk && receipt.phase === 'ready'
+    && (!receipt.sessionPreservation?.required || receipt.sessionPreservation.verified === true)) {
     state.status = 'applied';
     state.summary = state.commit
       ? `进化提交 ${String(state.commit).slice(0, 8)} 已随本次重启应用`
@@ -1124,8 +1127,9 @@ function scheduleAppliedServiceConfirmation(commit, receipt) {
     const live = readState();
     if (live.status !== 'applied' || live.commit !== commit) return; // 状态已被人工/流程改写
     const latest = readApplyReceipt();
-    const ready = (latest && latest.phase === 'ready' && latest.expectedHead === receipt.expectedHead)
-      || await portApiReadable(port);
+    const ready = (latest && latest.phase === 'ready' && latest.expectedHead === receipt.expectedHead
+      && (!latest.sessionPreservation?.required || latest.sessionPreservation.verified === true))
+      || (!receipt.sessionPreservation?.required && await portApiReadable(port));
     if (ready) {
       // 运行问题批次只能由「真实逐类复盘过反馈」的双 Agent 主 Agent 销账
       // （feedbackReviewed + 非 repairOnly）；未复盘/单 Agent/修复轮一律保留事件。
@@ -2646,11 +2650,18 @@ function bindWxRestartIpc(child, expected) {
   let preparation = null;
   let active = true;
   let ownedNonce = '';
-  child.once('exit', () => { active = false; });
-  child.once('disconnect', () => { active = false; });
+  const cancel = () => {
+    active = false;
+    if (ownedNonce) {
+      try { Promise.resolve(deps.cancelWxRestart?.({ ...expected, nonce: ownedNonce })).catch(() => {}); }
+      catch { /* The helper also releases its nonce-scoped barrier. */ }
+    }
+  };
+  child.once('exit', cancel);
+  child.once('disconnect', cancel);
   child.on('message', async message => {
     if (message?.type === 'wx_restart_cancel' && message.nonce === ownedNonce
-      && message.targetCommit === expected.targetCommit) { active = false; return; }
+      && message.targetCommit === expected.targetCommit) { cancel(); return; }
     if (!message || message.type !== 'wx_restart_request'
       || message.targetCommit !== expected.targetCommit || message.oldPid !== expected.oldPid
       || message.oldStartTicks !== expected.oldStartTicks || !/^[a-z0-9-]{16,128}$/i.test(message.nonce || '')) return;
@@ -2673,7 +2684,7 @@ function bindWxRestartIpc(child, expected) {
         const result = await preparation;
         reply.ok = current() && result?.ok === true
           && JSON.stringify(result.handoff) === JSON.stringify(message.handoff)
-          && deps.validateWxRestart(result.handoff) === true;
+          && await deps.validateWxRestart(result.handoff) === true;
       }
     } catch { /* A failed preflight always retains the current process. */ }
     if (!reply.ok && current()) {
@@ -2681,6 +2692,7 @@ function bindWxRestartIpc(child, expected) {
       state.applyDeferredReason = PREFLIGHT_REASONS[reply.reasonCode] || PREFLIGHT_REASONS.rejected;
       writeState(state);
     }
+    if (!reply.ok && message.nonce === ownedNonce) cancel();
     if (child.connected) { try { child.send(reply); } catch { /* helper aborts on disconnect */ } }
   });
 }
