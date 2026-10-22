@@ -26,6 +26,22 @@ const { activityRetired } = storeToRefs(activityStore)
 const { evolve } = storeToRefs(evolutionStore)
 
 const operationFeedback = ref<any>(null)
+// 仅严格成功回复中明确列出的正数量奖励才作为“已确认奖励”展示；名称缺失/纯ID兜底未知物品。
+const confirmedRewards = computed(() => {
+  const feedback = operationFeedback.value
+  if (feedback?.ok !== true || feedback.outcome === 'unknown' || !Array.isArray(feedback.rewards))
+    return []
+  return feedback.rewards.flatMap((item: any) => {
+    const raw = item?.count
+    const count = typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0
+      ? String(raw)
+      : typeof raw === 'string' && /^[1-9]\d*$/.test(raw) ? raw : ''
+    if (!count)
+      return []
+    const name = typeof item?.name === 'string' ? item.name.trim() : ''
+    return [{ name: name && !/^(?:未知物品|物品|未知种子|植物)?\s*\d+$/.test(name) ? name : '未知物品', count }]
+  })
+})
 const showActivityAnalysis = ref(false)
 const showActivityManagement = ref(false)
 
@@ -235,6 +251,17 @@ onMounted(() => {
             槽位 {{ Number(row.slotIndex) + 1 }}：{{ row.success ? '已雇佣' : row.errorMsg || '未成功' }}
           </li>
         </ul>
+        <div v-if="confirmedRewards.length" class="flex flex-col gap-1">
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            本次成功回复确认的奖励
+          </p>
+          <ul class="act-rows">
+            <li v-for="(reward, index) in confirmedRewards" :key="`${reward.name}-${index}`">
+              <span class="act-badge act-badge-success">已确认</span>
+              <span class="min-w-0 flex-1 break-words">{{ reward.name }} × {{ reward.count }}</span>
+            </li>
+          </ul>
+        </div>
       </section>
       <MilkTeaActivityPanel v-if="!milkTeaRetired" :key="String(currentAccountId)" :activity="milkTeaActivity" :loading="milkTeaLoading" :operating="milkTeaOperating || (claimAllRunning ? 'claimAll' : '')" :queries="milkTeaQueries" @refresh="refreshMilkTea" @query="queryMilkTea" @operate="operateMilkTea" />
       <FestivalSignInPanel :key="`festival-${currentAccountId}`" :account-id="String(currentAccountId)" />

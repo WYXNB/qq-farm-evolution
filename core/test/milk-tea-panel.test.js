@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const h = require('./activity-availability.test');
-const { WEB, vue, compileSfcModule, render, makeNode, buttonsOf, textOf, findAll, click, flush, mountActivityPage, apiMock, snapshot } = h;
+const { WEB, vue, compileSfcModule, render, makeNode, buttonsOf, textOf, findAll, click, flush, mountActivityPage, apiMock, deferred, snapshot } = h;
 const path = require('node:path');
 const activeRoots = [];
 test.after(() => { for (const root of activeRoots) render(null, root); });
@@ -48,7 +48,8 @@ test('实际页面六个查询按钮到store；挂载/普通刷新无这些请�
 test('十四种面板操作均先确认后发出；成员/槽位/配方/班次/费用取当前选择', async () => {
   const q = queries(); q.shop.data = { slots: [], employeeSlotCount: 1, slotAvailabilityKnown: true, freeSlotIndexes: [0] }; q.hireList.data = { durationId: 1, robots: [{ gid:'101',name:'员工',talentName:'服务' }] };
   q.workshop.data = { recipes:[{recipeId:2,fruitItemId:40525,name:'甜莓奶茶',unlocked:true}], fruits:[{uid:'23563',itemId:40525,name:'森野甜莓',count:7}] };
-  q.work.data = { myShift: { shiftId:'3001',interactPreviews:[{interactionType:1}] } };
+  // 明确有效班次：互动次数/上限/结束时间齐全，避免把缺失字段误判为可互动。
+  q.work.data = { interactDone:false, myShift: { shiftId:'3001',interactCount:0,interactLimit:3,endAt:4102444800,interactPreviews:[{interactionType:1}] } };
   const { root, events } = mountPanel(snapshot({ summary:{canUpgrade:true}, growthFund:{unlocked:true}, exchangeShop:{items:[{id:9,name:'种子',costs:[{id:1041,count:'10',name:'奶茶券'}],exchangeBounds:{requestMax:999,limitKnown:true,hasPurchaseLimit:true,remainingLimit:5,affordableCount:20,maxCount:5,blockReason:'',unitCosts:[{itemId:1041,count:'10',name:'奶茶券'}]}}]} }), q);
   setModel(root,'店名','奶茶冲鸭'); setModel(root,'雇佣候选','101'); setModel(root,'选择森野甜莓，7个',['23563']); await vue.nextTick();
   for (const label of ['开店','改名','升级','领取收银台','使用宣传喇叭','雇佣所选员工','暂停被雇佣','制作所选果实','领取工资','执行班次互动','确认兑换 种子 × 1','领取成长基金','领取每日快乐值','领取快乐值档位']) {
@@ -195,4 +196,269 @@ test('批量制作确认期间材料更新会撤销旧确认与选择，不提�
   assert.match(textOf(root), /请重新选择并确认/);
   assert.equal(button(root, '制作所选果实').props.disabled, true);
   assert.equal(events.length, 0);
+});
+
+// ===== 2026-10-21 互动可用性守卫与已确认奖励展示 =====
+function validWork() {
+  return { interactDone: false, myShift: { shiftId: '3001', interactCount: 0, interactLimit: 3, endAt: 4102444800, interactPreviews: [{ interactionType: 1 }] } };
+}
+function workQueries(work, extra = {}) {
+  const q = queries();
+  q.work = { data: work, loading: !!extra.loading, error: extra.error || '' };
+  return q;
+}
+const dialogCount = root => findAll(root, n => n.props.role === 'dialog').length;
+
+test('互动选择与按钮按明确班次次数启用；耗尽/已完成/零上限/未知/无班次/加载/失败/结算均禁用并给出具体原因', async () => {
+  const exhausted = validWork(); exhausted.myShift.interactCount = 3;
+  const done = validWork(); done.interactDone = true;
+  const zeroLimit = validWork(); zeroLimit.myShift.interactLimit = 0;
+  const unknownCount = validWork(); unknownCount.myShift.interactCount = null;
+  const unknownLimit = validWork(); unknownLimit.myShift.interactLimit = undefined;
+  const noShiftId = validWork(); noShiftId.myShift.shiftId = '';
+  const ended = validWork(); ended.myShift.endAt = 1;
+  const badOptions = [null, {}, 'invalid', [null, { interactionType: true }, { interactionType: '1' }]].map(value => {
+    const work = validWork(); work.myShift.interactPreviews = value; return workQueries(work);
+  });
+  const cases = [
+    { label: '耗尽', q: workQueries(exhausted), message: /互动次数已用完/ },
+    { label: 'interactDone', q: workQueries(done), message: /互动已完成/ },
+    { label: '零上限', q: workQueries(zeroLimit), message: /互动次数为零/ },
+    { label: '未知次数', q: workQueries(unknownCount), message: /互动次数待确认/ },
+    { label: '未知上限', q: workQueries(unknownLimit), message: /互动次数上限待确认/ },
+    { label: '未知班次标识', q: workQueries(noShiftId), message: /班次信息待确认/ },
+    { label: '已结束班次', q: workQueries(ended), message: /班次已经结束/ },
+    ...badOptions.map((q, index) => ({ label: `畸形选项${index}`, q, message: /互动选项待确认/ })),
+    { label: '无班次', q: workQueries({ interactDone: false, myShift: null }), message: /没有进行中的班次/ },
+    { label: '无数据', q: workQueries(null), message: /工作状态待确认/ },
+    { label: '加载', q: workQueries(validWork(), { loading: true }), message: /工作状态读取中/ },
+    { label: '读取失败', q: workQueries(validWork(), { error: '合成工作读取失败' }), message: /工作状态读取失败/ },
+    { label: '结算', q: workQueries(validWork()), activity: { timing: { phase: 'settle', endTime: 0 } }, message: /结算期/ },
+  ];
+  for (const row of cases) {
+    const { root, events } = mountPanel(snapshot(row.activity || {}), row.q);
+    assert.equal(button(root, '执行班次互动').props.disabled, true, `${row.label} 必须禁用互动`);
+    assert.equal(findAll(root, n => n.props['aria-label'] === '互动类型')[0].props.disabled, true, `${row.label} 必须同步禁用选择`);
+    assert.match(textOf(root), row.message, `${row.label} 必须显示具体原因`);
+    if (!/已用完/.test(String(row.message)))
+      assert.doesNotMatch(textOf(root), /互动次数已用完/, `${row.label} 不得假装次数耗尽`);
+    click(button(root, '执行班次互动')); await vue.nextTick();
+    assert.equal(events.length, 0, `${row.label} 必须零写`);
+    assert.equal(dialogCount(root), 0, `${row.label} 不得打开确认`);
+    render(null, root);
+  }
+});
+
+test('合法班次正常互动先确认后恰一次操作；选择不在当前选项时禁用不提交', async () => {
+  const { root, events } = mountPanel(snapshot(), workQueries(validWork()));
+  assert.equal(button(root, '执行班次互动').props.disabled, false);
+  assert.equal(findAll(root, n => n.props['aria-label'] === '互动类型')[0].props.disabled, false);
+  setModel(root, '互动类型', 5); await vue.nextTick();
+  assert.equal(button(root, '执行班次互动').props.disabled, true);
+  assert.match(textOf(root), /所选互动不在当前班次可选项中/);
+  click(button(root, '执行班次互动')); await vue.nextTick();
+  assert.equal(events.length, 0);
+  setModel(root, '互动类型', 1); await vue.nextTick();
+  assert.equal(button(root, '执行班次互动').props.disabled, false);
+  click(button(root, '执行班次互动')); await vue.nextTick();
+  assert.equal(events.length, 0, '确认前零写');
+  assert.equal(dialogCount(root), 1);
+  click(button(root, '确认执行')); await vue.nextTick();
+  assert.deepEqual(events, [['operate', 'interact', { interactionType: 1, shiftId: '3001' }]]);
+  assert.equal(dialogCount(root), 0);
+  render(null, root);
+});
+
+test('互动确认期间班次/次数/上限/选项/读取状态/完成标记/选择/结算变化均撤销，旧确认零写', async () => {
+  const mutations = [
+    ['班次', q => { q.work.data.myShift.shiftId = '3002'; }],
+    ['次数', q => { q.work.data.myShift.interactCount = 1; }],
+    ['上限', q => { q.work.data.myShift.interactLimit = 4; }],
+    ['选项', q => { q.work.data.myShift.interactPreviews = [{ interactionType: 2 }]; }],
+    ['读取中', q => { q.work.loading = true; }],
+    ['读取失败', q => { q.work.error = '合成失败'; }],
+    ['完成标记', q => { q.work.data.interactDone = true; }],
+    ['数据缺失', q => { q.work.data = null; }],
+  ];
+  for (const [label, mutate] of mutations) {
+    const q = vue.reactive(workQueries(validWork()));
+    const { root, events } = mountPanel(snapshot(), q);
+    click(button(root, '执行班次互动')); await vue.nextTick();
+    assert.equal(dialogCount(root), 1, `${label} 前置确认必须打开`);
+    mutate(q); await vue.nextTick();
+    assert.equal(dialogCount(root), 0, `${label} 变化必须撤销旧确认`);
+    assert.equal(events.length, 0, `${label} 变化不得提交`);
+    render(null, root);
+  }
+  const q = vue.reactive(workQueries(validWork()));
+  q.work.data.myShift.interactPreviews = [{ interactionType: 1 }, { interactionType: 2 }];
+  const selection = mountPanel(snapshot(), q);
+  click(button(selection.root, '执行班次互动')); await vue.nextTick();
+  setModel(selection.root, '互动类型', 2); await vue.nextTick();
+  assert.equal(dialogCount(selection.root), 0, '选择变化必须撤销旧确认');
+  assert.equal(selection.events.length, 0);
+  render(null, selection.root);
+  const activity = vue.reactive(snapshot());
+  const settled = mountPanel(activity, workQueries(validWork()));
+  click(button(settled.root, '执行班次互动')); await vue.nextTick();
+  activity.timing.phase = 'settle'; await vue.nextTick();
+  assert.equal(dialogCount(settled.root), 0, '结算状态变化必须撤销旧确认');
+  assert.equal(settled.events.length, 0);
+  render(null, settled.root);
+});
+
+test('互动确认支持取消与Escape；确认时班次已过endAt就地零写撤销', async () => {
+  const q = vue.reactive(workQueries(validWork()));
+  const { root, events } = mountPanel(snapshot(), q);
+  click(button(root, '执行班次互动')); await vue.nextTick();
+  click(button(root, '取消')); await vue.nextTick();
+  assert.equal(dialogCount(root), 0); assert.equal(events.length, 0);
+  click(button(root, '执行班次互动')); await vue.nextTick();
+  const backdrop = findAll(root, n => String(n.props.class || '').includes('milk-modal-backdrop'))[0];
+  assert.ok(backdrop, '真实组件必须渲染确认遮罩');
+  backdrop.props.onKeydown({ key: 'Escape', preventDefault() {} }); await vue.nextTick();
+  assert.equal(dialogCount(root), 0); assert.equal(events.length, 0);
+  const originalNow = Date.now;
+  let now = 1_700_000_000_000;
+  Date.now = () => now;
+  try {
+    q.work.data.myShift.endAt = Math.floor(now / 1000) + 5;
+    await vue.nextTick();
+    click(button(root, '执行班次互动')); await vue.nextTick();
+    assert.equal(dialogCount(root), 1);
+    now += 10_000;
+    click(button(root, '确认执行')); await vue.nextTick();
+    assert.equal(dialogCount(root), 0);
+    assert.equal(events.length, 0, '班次过期确认必须零写');
+    assert.match(textOf(root), /班次已经结束/);
+  } finally {
+    Date.now = originalNow;
+    render(null, root);
+  }
+});
+
+function mountRewardPage(postHandler, activity = snapshot()) {
+  const api = apiMock();
+  api.setGet(async () => ({ data: { ok: true, activity } }));
+  api.setPost(postHandler);
+  const page = mountActivityPage(api);
+  activeRoots.push(page.root);
+  return { api, page };
+}
+async function submitMilkTeaOperation(page) {
+  await flush();
+  click(button(page.root, '领取每日快乐值')); await vue.nextTick();
+  click(button(page.root, '确认执行')); await flush(); await flush();
+}
+
+test('实际页面严格ok===true的成功回复展示已确认奖励，保留字符串精度并兜底未知名称', async () => {
+  const rewards = [
+    { itemId: 40525, name: '森野甜莓', count: '9007199254740993' },
+    { itemId: 0, name: '', count: 3 },
+    { itemId: 42, name: '12345', count: '2' },
+    { itemId: 43, name: '零数量', count: 0 },
+    { itemId: 44, name: '负数', count: -1 },
+    { itemId: 45, name: '物品12345', count: '4' },
+    null,
+    { name: '畸形数量', count: {} },
+  ];
+  const { api, page } = mountRewardPage(async () => ({ data: { ok: true, message: '操作完成', rewards } }));
+  await submitMilkTeaOperation(page);
+  const text = textOf(page.root);
+  assert.match(text, /森野甜莓 × 9007199254740993/);
+  assert.match(text, /未知物品 × 3/);
+  assert.match(text, /未知物品 × 2/);
+  assert.match(text, /未知物品 × 4/);
+  assert.doesNotMatch(text, /零数量|负数|物品12345|畸形数量/);
+  assert.equal(api.calls.post.length, 1);
+  render(null, page.root);
+});
+
+test('实际页面 gameplaySuccess=false 但 ok===true 的真实互动回复仍展示已确认奖励', async () => {
+  const { api, page } = mountRewardPage(async () => ({ data: { ok: true, gameplaySuccess: false, message: '互动未生效（玩法结果，非请求失败）', rewards: [{ itemId: 1040528, name: '黄金·森野红柚', count: '1' }] } }), snapshot({ gameplay: { work: { available: true, data: validWork() } } }));
+  await flush();
+  click(button(page.root, '执行班次互动')); await vue.nextTick();
+  assert.equal(api.calls.post.length, 0);
+  click(button(page.root, '确认执行')); await flush(); await flush();
+  assert.match(textOf(page.root), /黄金·森野红柚 × 1/);
+  assert.equal(api.calls.post.length, 1);
+  assert.equal(api.calls.post[0].body.action, 'interact');
+  assert.deepEqual(api.calls.post[0].body.input, { interactionType: 1, shiftId: '3001' });
+  render(null, page.root);
+});
+
+test('失败/非严格成功/未知奖励/异常回复不展示奖励且不自动重试', async () => {
+  const cases = [
+    ['非严格成功', async () => ({ data: { ok: 'true', rewards: [{ name: '伪造奖励', count: 1 }] } })],
+    ['普通失败', async () => ({ data: { ok: false, error: '合成失败', rewards: [{ name: '伪造奖励', count: 1 }] } })],
+    ['未知结果', async () => ({ data: { ok: true, outcome: 'unknown', rewards: [{ name: '伪造奖励', count: 1 }] } })],
+    ['未知奖励形态', async () => ({ data: { ok: true, rewards: { name: '伪造奖励', count: 1 } } })],
+    ['异常', async () => { throw new Error('synthetic network failure'); }],
+  ];
+  for (const [label, handler] of cases) {
+    const { api, page } = mountRewardPage(handler);
+    await submitMilkTeaOperation(page);
+    assert.doesNotMatch(textOf(page.root), /伪造奖励/, `${label} 不得冒充已确认奖励`);
+    assert.equal(api.calls.post.length, 1, `${label} 不得自动重试`);
+    render(null, page.root);
+  }
+});
+
+test('切号往返/卸载后的迟到成功回复不泄漏旧奖励', async () => {
+  const gate = deferred();
+  const { api, page } = mountRewardPage(() => gate.promise);
+  await flush();
+  click(button(page.root, '领取每日快乐值')); await vue.nextTick();
+  click(button(page.root, '确认执行')); await flush();
+  page.accountRef.value = 'acc-2'; await flush();
+  page.accountRef.value = 'acc-1'; await flush();
+  const reads = api.calls.get.length;
+  gate.resolve({ data: { ok: true, rewards: [{ name: '迟到奖励', count: '5' }] } });
+  await flush(); await flush();
+  assert.equal(page.toastLog.length, 0, '切号往返后不得弹旧回复提示');
+  assert.doesNotMatch(textOf(page.root), /迟到奖励/);
+  assert.equal(api.calls.get.length, reads, '迟到结果不得触发新读取');
+  render(null, page.root);
+
+  const gate2 = deferred();
+  const second = mountRewardPage(() => gate2.promise);
+  await flush();
+  click(button(second.page.root, '领取每日快乐值')); await vue.nextTick();
+  click(button(second.page.root, '确认执行')); await flush();
+  render(null, second.page.root);
+  gate2.resolve({ data: { ok: true, rewards: [{ name: '卸载迟到奖励', count: '6' }] } });
+  await flush(); await flush();
+  assert.doesNotMatch(textOf(second.page.root), /卸载迟到奖励/);
+  assert.equal(second.page.toastLog.length, 0);
+  // 卸载后重进：新页面只展示 refreshed 快照，不继承旧回复。
+  const reentered = mountRewardPage(async () => ({ data: { ok: true } }));
+  await flush();
+  assert.doesNotMatch(textOf(reentered.page.root), /卸载迟到奖励/);
+  assert.equal(reentered.api.calls.post.length, 0);
+  render(null, reentered.page.root);
+});
+
+test('活动到期后的迟到成功回复不泄漏奖励且不新增读取', async () => {
+  const originalNow = Date.now;
+  let now = 1_700_000_000_000;
+  Date.now = () => now;
+  try {
+    const gate = deferred();
+    const api = apiMock();
+    api.setGet(async () => ({ data: { ok: true, activity: snapshot({ timing: { endTime: Math.floor(now / 1000) + 5, phase: 'open' } }) } }));
+    api.setPost(() => gate.promise);
+    const page = mountActivityPage(api); activeRoots.push(page.root);
+    await flush();
+    click(button(page.root, '领取每日快乐值')); await vue.nextTick();
+    click(button(page.root, '确认执行')); await flush();
+    now += 10_000;
+    const reads = api.calls.get.length;
+    gate.resolve({ data: { ok: true, rewards: [{ name: '到期迟到奖励', count: '7' }] } });
+    await flush(); await flush();
+    assert.doesNotMatch(textOf(page.root), /到期迟到奖励/);
+    assert.equal(api.calls.get.length, reads, '到期刷新门必须零新读取');
+    render(null, page.root);
+  } finally {
+    Date.now = originalNow;
+  }
 });
