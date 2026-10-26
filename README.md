@@ -78,7 +78,9 @@ export FARM_ADMIN_PASSWORD='<your-strong-password>'
 
 - 管理员只在数据目录还没有任何管理员时创建；已有管理员的部署继续使用原账号，不需要重复初始化，也不会因修改环境变量而覆盖密码。
 - 源码方式启动不会自动读取仓库根目录的 `.env`：在完成依赖安装和前端构建后，直接 `npm --prefix core start`（或 `bash start.sh` / `pnpm -C core dev`）前要先 `export`，或写进你使用的进程管理器环境。
-- 用户名需 3-32 位字母数字下划线，密码需满足强度要求，不符合时拒绝创建。
+- 用户名需 3-32 位，只能包含英文字母（`A-Z`、`a-z`）、数字和下划线，例如 `farm_admin`；不能包含中文、空格、连字符 `-` 或其他特殊符号。上面的 `<your-admin-name>` 是占位符，需要整体替换。
+- 密码需 6-128 位，包含大写字母、小写字母、数字、特殊符号中的至少两类；不要求四类齐全。禁止使用 `password`、`123456`、`qwerty`、`abc123`、`111111`、`000000`（不区分大小写）。
+- 初始化日志会指出具体不合格的配置项及原因。若用户名不合格，只修改密码也无法创建管理员。
 
 > [!IMPORTANT]
 > 不要把初始化变量写进仓库、日志或截图，也不要把管理面板直接暴露到公网。
@@ -131,6 +133,8 @@ FARM_ADMIN_PASSWORD='<your-strong-password>'
 ```
 
 `docker compose` 会把这两个值转发进容器。密码使用单引号包裹，避免 `$` 等字符被当作变量展开。已有管理员的部署可省略这一步；未配置时容器仍会启动，但不会创建管理员。
+
+用户名和密码遵循上面的初始化规则。若首次初始化失败，修改 `.env` 后执行 `docker compose up -d --force-recreate` 让新环境变量生效；仅执行 `docker compose restart` 不会更新容器环境。宿主机已 `export` 的同名变量会优先于 `.env`，需同步修改或先 `unset FARM_ADMIN_USERNAME FARM_ADMIN_PASSWORD`。
 
 完成配置后启动：
 
