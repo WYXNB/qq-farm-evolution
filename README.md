@@ -1,12 +1,19 @@
 <div align="center">
 
-<img src="web/public/icon.png" width="96" alt="QQ Farm Bot 图标">
+<img src="web/public/icon.png" width="72" alt="QQ Farm Bot 嫩芽图标">
 
 # QQ Farm Bot
 
-QQ 农场自动化工具，支持多账号和 Web 管理面板。
+**把日常农活交给小帮手，给每一次丰收留点期待。**
 
-[功能](#功能) · [源码部署](#源码部署) · [Docker 部署](#docker-部署) · [账号登录](#账号登录) · [文档](#文档)
+多账号管理 · 日常农活 · 作物图鉴 · Web 控制面板
+
+<kbd>🌱 Node.js 20+</kbd> &nbsp; <kbd>📦 pnpm 10</kbd> &nbsp; <kbd>💚 Vue 3</kbd> &nbsp; <kbd>🐳 Docker Compose</kbd>
+
+<br><br>
+<img src="web/public/activity/star-festival/star-farm.png" width="340" alt="农场主题插画：绿植环绕的小屋与庭院">
+
+[🌾 看看功能](#功能) · [🚜 源码部署](#源码部署) · [🐳 Docker 部署](#docker-部署) · [🔑 账号登录](#账号登录) · [📖 使用文档](#文档)
 
 </div>
 
@@ -15,20 +22,42 @@ QQ 农场自动化工具，支持多账号和 Web 管理面板。
 
 <a name="-能做什么"></a>
 
-## 功能
+<a name="功能"></a>
 
-- **多账号管理**：集中查看账号状态，分别配置和启停。
-- **日常农活**：收获、种植、浇水、除草、除虫，以及好友相关操作。
-- **Web 面板**：实时日志、数据统计、作物图鉴、土地状态和变异效果。
-- **任务与活动**：任务、商城和已适配活动的查看与操作。
-- **账号登录**：内置微信扫码、手动填码和手机抓包登录。
+## 🌾 能做什么
+
+<table>
+<tr>
+<td align="center" width="33%">
+<img src="core/src/gameConfig/seed_images_named/10007_浇水_icon_watering.png" height="64" alt="浇水壶图标">
+<br><br><b>🌱 打理日常农活</b>
+<p>收获、种植、浇水、除草、除虫<br>照看自己的田，也能拜访好友</p>
+</td>
+<td align="center" width="33%">
+<img src="core/src/gameConfig/seed_images_named/42254_Crop_2254.png" height="64" alt="作物图鉴图标">
+<br><br><b>🌻 认识每株作物</b>
+<p>作物图鉴、土地状态与变异效果<br>看看田里长出了什么新惊喜</p>
+</td>
+<td align="center" width="33%">
+<img src="web/public/activity/star-festival/star-token.png" height="64" alt="活动道具图标">
+<br><br><b>🎉 看看任务与活动</b>
+<p>任务、商城与已适配活动<br>查看奖励和当前可用的操作</p>
+</td>
+</tr>
+</table>
+
+- 👨‍🌾 **照看多座农场**：集中查看账号状态，为不同账号分别配置和启停。
+- 🖥️ **随时看看田里**：Web 控制面板搭配实时日志与数据统计。
+- 📱 **轻松添加账号**：内置微信扫码、手动填码和手机抓包登录。
 
 活动支持随游戏更新而变化，部分活动仅提供只读展示；可用的兑换、抽奖和领取操作以面板为准。
 
 <a name="-开始种田"></a>
 <a name="把农场跑起来"></a>
 
-## 源码部署
+<a name="源码部署"></a>
+
+## 🚜 源码部署
 
 需要 Node.js 20+、Git 和 pnpm 10。本项目锁定 pnpm `10.30.2`。
 
@@ -72,7 +101,9 @@ bash start.sh
 
 <a name="-docker-部署"></a>
 
-## Docker 部署
+<a name="docker-部署"></a>
+
+## 🐳 Docker 部署
 
 需要 Git 和 Docker Compose。先克隆仓库并进入目录：
 
@@ -117,7 +148,9 @@ docker compose logs -f
 
 <a name="-登录方式"></a>
 
-## 账号登录
+<a name="账号登录"></a>
+
+## 🔑 账号登录
 
 <a name="-微信扫码登录"></a>
 
@@ -144,7 +177,9 @@ docker compose logs -f
 - 普通用户注册所需的时间卡密，由本部署管理员创建和提供；额度卡密用于登录后续费。
 - 免费领取默认关闭，管理员创建可用时间卡密并开启领取后才可使用。
 
-## 常用命令
+<a name="常用命令"></a>
+
+## 🛠️ 常用命令
 
 | 命令 | 用途 |
 | --- | --- |
@@ -154,16 +189,32 @@ docker compose logs -f
 | `pnpm lint` | 检查前后端代码 |
 | `pnpm -C core test` | 运行后端测试 |
 
-## 数据备份
+<a name="数据备份"></a>
+
+## 🧺 数据与备份
 
 源码部署默认使用 `core/data/`；Docker 部署使用上表中的持久化目录。升级前请备份数据，妥善保管账号和登录凭据，不要将数据目录、`.env`、日志或密钥提交到公开仓库。
 
 <a name="-使用文档"></a>
 
-## 文档
+<a name="文档"></a>
+
+## 📖 继续逛逛
 
 - [更新记录](docs/CHANGELOG.md)
 - [活动适配说明](core/docs/activity-update-runbook.md)
 - [TSDK/WASM 更新手册](core/docs/tsdk-update-runbook.md)
 
-感谢上游开源项目和参与贡献、反馈的使用者。
+---
+
+<div align="center">
+
+<img src="core/src/gameConfig/seed_images_named/40021_Crop_21_Fruit.png" height="48" alt="活动作物图标"> &nbsp;
+<img src="core/src/gameConfig/seed_images_named/41435_Crop_1435_Fruit.png" height="48" alt="作物果实图标"> &nbsp;
+<img src="core/src/gameConfig/seed_images_named/42254_Crop_2254.png" height="48" alt="作物图标">
+
+**一块小田，一点期待。🌿**
+
+感谢上游开源项目和每一位参与贡献、反馈的使用者。
+
+</div>
