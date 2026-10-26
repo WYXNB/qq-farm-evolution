@@ -558,12 +558,15 @@ test('批次：不可变快照落盘、失败显式 incomplete、摘要不含正
 });
 
 test('公开回复模板：完整更新步骤 + 可点击自有 README 锚点，无诊断/测试/Star 推广', () => {
-  const entry = { issue: ISSUE, revision: REV };
+  const entry = { issue: ISSUE, revision: REV, detail: { cause: 'SyntheticPrivateAlias', change: '私有诊断 test/private-diagnostic.test.js' } };
   const cfg = feedback.readGithubFeedbackConfig({ config: makeConfig({
     publicActions: ['git_pull', 'docker_compose'], readmeAnchors: ['-快速开始', '常见问题'], extraNote: '更新后重启面板即可',
   }) });
   const reply = feedback.buildPublicReply(cfg, entry);
-  assert.match(reply, /^已修复（fixed）\n/);
+  assert.match(reply, /^这个问题已修复，感谢反馈！\n/);
+  assert.doesNotMatch(reply, /SyntheticPrivateAlias|私有诊断|private-diagnostic/);
+  assert.match(reply, /请更新后重试。/);
+  assert.match(reply, /如果遇到其他问题，欢迎继续反馈！/);
   assert.ok(reply.includes(`git pull --ff-only https://github.com/${REPO}.git main`), '完整拉取命令带自有仓库');
   assert.ok(reply.includes('pnpm install --frozen-lockfile'), '源码路径含依赖安装');
   assert.ok(reply.includes('pnpm build:web'), '源码路径含前端构建');

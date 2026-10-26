@@ -32,6 +32,7 @@ const LOCK_FILE = 'evolution-github-outbox.lock';
 const DELIVERY_MARKER = 'farm-bot-feedback';
 const POLL_MIN_MINUTES = 15;
 const POLL_MAX_MINUTES = 30;
+const REPLIED_ISSUE_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 const ISSUE_PAGE_SIZE = 30;
 const MAX_NEW_CAPTURE_ISSUES = 12; // 单轮采集上限：超出部分显式留待下轮（可见溢出）
 const MAX_BATCH_ISSUES = 12;
@@ -96,6 +97,7 @@ function readGithubFeedbackConfig(options = {}) {
     token,
     ownerLogin,
     pollMs: pollMinutes * 60 * 1000,
+    autoCloseAfterReply: raw.autoCloseAfterReply === true,
     publicActions: actions,
     readmeAnchors,
     extraNote: sanitizePublicNote(raw.extraNote),
@@ -312,6 +314,8 @@ function normalizeStoredIssue(value, ownLogins = new Set()) {
     body: clip(value.body, 8000),
     author: clip(value.author, 100),
     state: value.state === 'open' ? 'open' : 'closed',
+    locked: value.locked === true,
+    pullRequest: value.pullRequest === true,
     comments,
     commentsTruncated: value.commentsTruncated === true,
     commentCount: Math.max(comments.length, Math.max(0, Number(value.commentCount) || 0)),
@@ -363,6 +367,12 @@ function readStore(dataDir, cfg = null) {
     // 自有身份（owner 配置 + 已认证登录）在指纹计算前解析，保证跨重启一致。
     issues: [],
     delivered,
+    followup: {
+      checkedAt: Math.max(0, Number(raw?.followup?.checkedAt) || 0),
+      closed: (Array.isArray(raw?.followup?.closed) ? raw.followup.closed : [])
+        .filter(item => Number.isInteger(item?.issue) && item.issue > 0 && Number.isFinite(item.at))
+        .slice(-50).map(item => ({ issue: item.issue, at: item.at })),
+    },
   };
   store.ownLogins = cfg ? ownLoginsOf(cfg, store) : new Set();
   store.issues = (Array.isArray(raw?.issues) ? raw.issues : [])
@@ -505,6 +515,8 @@ async function collectGithubFeedback(options = {}) {
       body: Object.hasOwn(detail.body, 'body') ? detail.body.body : raw.body,
       author: (detail.body.user || raw.user || {}).login,
       state: detail.body.state,
+      locked: detail.body.locked,
+      pullRequest: !!detail.body.pull_request,
       comments,
       commentsTruncated: commentsResult.truncated,
       commentCount: commentsResult.total,
@@ -720,7 +732,8 @@ function readmeAnchorLinks(cfg) {
 }
 
 function buildPublicReply(cfg, entry) {
-  const lines = ['已修复（fixed）', ''];
+  const lines = ['这个问题已修复，感谢反馈！'];
+  lines.push('', '请更新后重试。');
   if (cfg.publicActions.includes('git_pull')) {
     lines.push('- 更新方式（源码部署）：',
       `  git pull --ff-only https://github.com/${cfg.repo}.git main`,
@@ -737,7 +750,7 @@ function buildPublicReply(cfg, entry) {
     lines.push(`- 使用说明：${readmeAnchorLinks(cfg)}`);
   }
   if (cfg.extraNote) lines.push(`- ${cfg.extraNote}`);
-  lines.push('', deliveryMarker(entry.issue, entry.revision));
+  lines.push('', '如果遇到其他问题，欢迎继续反馈！', '', deliveryMarker(entry.issue, entry.revision));
   return lines.join('\n');
 }
 
@@ -1161,11 +1174,84 @@ async function fetchIssueForFreshness(cfg, request, issue, ownLogins) {
     body: detail.body.body,
     author: (detail.body.user || {}).login,
     state: detail.body.state,
+    locked: detail.body.locked,
+    pullRequest: !!detail.body.pull_request,
     comments,
+    commentsTruncated: commentsResult.truncated,
     commentCount: commentsResult.total,
     updatedAt: isoMs(detail.body.updated_at),
   }, ownLogins);
-  return { snapshot, fingerprint: issueFingerprint(snapshot, ownLogins) };
+  return { snapshot, fingerprint: issueFingerprint(snapshot, ownLogins), detailKey: issueDetailKey(detail.body) };
+}
+
+function issueDetailKey(detail) {
+  return JSON.stringify([detail.number, detail.title, detail.body, detail.updated_at, detail.comments,
+    detail.state, detail.locked === true, !!detail.pull_request, detail.user?.login]);
+}
+
+/** A new user response needs another maintainer reply; elapsed time alone never resolves it. */
+function inactiveRepliedIssue(issue, ownLogins, now) {
+  if (issue.state !== 'open' || issue.locked || issue.pullRequest || issue.commentsTruncated
+    || issue.commentCount !== issue.comments.length || !issue.updatedAt) return false;
+  const replies = issue.comments.filter(comment => ownLogins.has(comment.author.toLowerCase()) && comment.body.trim());
+  const latest = replies.sort((a, b) => a.createdAt - b.createdAt || a.id - b.id).at(-1);
+  if (!latest) return false;
+  const hasFollowup = issue.comments.some(comment => !ownLogins.has(comment.author.toLowerCase())
+    && (Math.max(comment.createdAt, comment.updatedAt) > latest.createdAt
+      || (comment.createdAt === latest.createdAt && comment.id > latest.id)));
+  if (hasFollowup) return false;
+  const lastCommentAt = Math.max(...issue.comments.map(comment => Math.max(comment.createdAt, comment.updatedAt)));
+  // Issue edits, reopening and other unexplained updates require a new review/reply.
+  if (issue.updatedAt > lastCommentAt || issue.updatedAt < latest.createdAt) return false;
+  return now - Math.max(issue.updatedAt, lastCommentAt) >= REPLIED_ISSUE_IDLE_MS;
+}
+
+/** Opt-in follow-up policy; every close is checked against fresh remote evidence. */
+async function closeInactiveRepliedIssues(options = {}) {
+  const cfg = readGithubFeedbackConfig(options);
+  if (!cfg?.autoCloseAfterReply) return { ok: false, reason: 'disabled' };
+  const dataDir = resolveDataDir(options);
+  return withDeliveryLock(dataDir, async () => {
+    const store = readStore(dataDir, cfg);
+    if (store.collection.state !== 'complete') return { ok: false, reason: 'collection_incomplete' };
+    if (store.configFingerprint !== configFingerprintOf(cfg)) return { ok: false, reason: 'config_changed' };
+    const request = options.request || createGithubRequest(cfg);
+    const auth = await apiGet(request, '/user');
+    const login = String(auth.body?.login || '').toLowerCase();
+    if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/.test(login)) return { ok: false, reason: auth.reason || 'invalid_response' };
+    const ownLogins = new Set([cfg.ownerLogin, login].filter(Boolean));
+    const now = options.now ? options.now() : Date.now();
+    const candidates = store.issues.filter(issue => inactiveRepliedIssue(issue, ownLogins, now))
+      .slice(0, MAX_NEW_CAPTURE_ISSUES);
+    const closed = [];
+    for (const cached of candidates) {
+      const fresh = await fetchIssueForFreshness(cfg, request, cached.number, ownLogins);
+      if (!fresh.snapshot) continue;
+      if (fresh.snapshot.state === 'closed') {
+        cached.state = 'closed';
+        continue;
+      }
+      if (!inactiveRepliedIssue(fresh.snapshot, ownLogins, now)) continue;
+      // Recheck detail immediately before PATCH: activity during comment pagination cancels closing.
+      const latest = await apiGet(request, `/repos/${cfg.repo}/issues/${cached.number}`);
+      if (!latest.body || issueDetailKey(latest.body) !== fresh.detailKey) continue;
+      try {
+        const response = await request(`/repos/${cfg.repo}/issues/${cached.number}`, {
+          method: 'PATCH', body: { state: 'closed', state_reason: 'completed' },
+        });
+        if (response?.statusCode === 200 && response.body?.state === 'closed'
+          && Number(response.body.number) === cached.number) {
+          cached.state = 'closed';
+          closed.push(cached.number);
+          store.followup.closed.push({ issue: cached.number, at: now });
+        }
+      } catch { /* The next poll reads remote state first, including ambiguous successful PATCHes. */ }
+    }
+    store.followup.checkedAt = now;
+    store.followup.closed = store.followup.closed.slice(-50);
+    if (!writeStore(dataDir, store)) return { ok: false, reason: 'storage_failed', closed };
+    return { ok: true, closed };
+  });
 }
 
 async function tryPublicSend({ cfg, entry, request, publishedCheck, ownLogins, now }) {
@@ -1492,8 +1578,12 @@ function startGithubFeedbackCollector(options = {}) {
     if (!state.running) {
       state.running = true;
       // 采集与发送失败只影响反馈通道，绝不触发新的进化运行。
-      try { await collectGithubFeedback(state.options); } catch { /* 固定类别已入存储 */ }
+      let collection;
+      try { collection = await collectGithubFeedback(state.options); } catch { /* 固定类别已入存储 */ }
       try { await drainGithubFeedbackOutbox(state.options); } catch { /* 同上 */ }
+      if (collection?.ok && collection.state === 'complete') {
+        try { await closeInactiveRepliedIssues(state.options); } catch { /* Next poll retries with fresh evidence. */ }
+      }
       state.running = false;
     }
     if (state.stopped) return;
@@ -1521,6 +1611,7 @@ module.exports = {
   startGithubFeedbackCollector,
   stopGithubFeedbackCollector,
   collectGithubFeedback,
+  closeInactiveRepliedIssues,
   captureFeedbackBatch,
   // 读取已持久化批次（自主返工沿用原批次时用；不重新采集、不覆盖文件）。
   readCapturedBatch: options => readBatchFile(resolveDataDir(options)),
