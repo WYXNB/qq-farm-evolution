@@ -8,12 +8,12 @@
 
 多账号管理 · 日常农活 · 作物图鉴 · Web 控制面板
 
-<kbd>🌱 Node.js 20+</kbd> &nbsp; <kbd>📦 pnpm 10</kbd> &nbsp; <kbd>💚 Vue 3</kbd> &nbsp; <kbd>🐳 Docker Compose</kbd>
+<kbd>🌱 Node.js 20.19+</kbd> &nbsp; <kbd>📦 pnpm 10</kbd> &nbsp; <kbd>💚 Vue 3</kbd> &nbsp; <kbd>🐳 Docker Compose</kbd>
 
 <br><br>
 <img src="web/public/activity/star-festival/star-farm.png" width="340" alt="农场主题插画：绿植环绕的小屋与庭院">
 
-[🌾 看看功能](#功能) · [🚜 源码部署](#源码部署) · [🐳 Docker 部署](#docker-部署) · [🔑 账号登录](#账号登录) · [📖 使用文档](#文档)
+[🌾 看看功能](#功能) · [🤖 AI 帮我安装](#ai安装) · [🚜 源码部署](#源码部署) · [🐳 Docker 部署](#docker-部署) · [🔑 账号登录](#账号登录) · [📖 使用文档](#文档)
 
 </div>
 
@@ -52,6 +52,22 @@
 
 活动支持随游戏更新而变化，部分活动仅提供只读展示；可用的兑换、抽奖和领取操作以面板为准。
 
+<a name="ai安装"></a>
+
+## 🤖 让 AI 帮你安装
+
+不想逐项配置？把下面这段话发给能操作本机终端的 AI 助手，让它先阅读 [AGENTS.md 安装指南](AGENTS.md)，再完成安装和验证：
+
+```text
+请帮我在当前机器安装 GitHub 项目 Xb-Fishing/qq-farm-evolution。
+先获取仓库并阅读根目录 AGENTS.md，按“AI 自动安装”完成环境检查、
+依赖安装、管理员配置、构建和持久启动。没有指定选项时使用指南的默认方案，
+自动生成强密码并妥善保存在本机。请实际验证面板、健康检查和管理员登录，
+完成后告诉我访问地址、凭据保存位置、数据目录，以及启停和查看日志的方法。
+```
+
+指南会优先复用已有安装和数据；首次安装可自动生成管理员配置。微信扫码仍由你在面板完成。
+
 <a name="-开始种田"></a>
 <a name="把农场跑起来"></a>
 
@@ -59,7 +75,7 @@
 
 ## 🚜 源码部署
 
-需要 Node.js 20+、Git 和 pnpm 10。本项目锁定 pnpm `10.30.2`。
+需要 Node.js 20.19+、Git 和 pnpm 10，推荐使用 Node.js 24 LTS 或 22 LTS（22.13+）。本项目锁定 pnpm `10.30.2`。
 
 ```bash
 git clone https://github.com/Xb-Fishing/qq-farm-evolution.git qq-farm-bot
@@ -201,6 +217,7 @@ docker compose logs -f
 
 ## 📖 继续逛逛
 
+- [AI 自动安装指南](AGENTS.md)
 - [更新记录](docs/CHANGELOG.md)
 - [活动适配说明](core/docs/activity-update-runbook.md)
 - [TSDK/WASM 更新手册](core/docs/tsdk-update-runbook.md)
