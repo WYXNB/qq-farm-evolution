@@ -254,7 +254,9 @@ test('在线账号不再按固定周期换 Code 或重启 Worker', () => {
 
 test('Worker 每次启动后都会重新挂载凭据保活', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/runtime/worker-manager.js'), 'utf8');
-  assert.match(source, /scheduleAccountRefresh\(account\.id\)/);
+  // 语义不绑定局部变量名：startWorker 末尾守卫式重挂保活，参数为 canonical
+  // 账号对象的 id（真实消费新 expiry 的行为由 wx-online-rescan 链路用例覆盖）
+  assert.match(source, /if \(typeof scheduleAccountRefresh === 'function'\) scheduleAccountRefresh\(\w+\.id\);/);
 });
 
 test('Code 刷新和长凭据保活失败会留下脱敏进化线索', () => {
@@ -319,18 +321,18 @@ test('Claude/Codex 可跨 NVM Node 版本解析并生成各自非交互命令', 
     const claude = buildEvolutionAgentCommand('claude', '审计', { env: { PATH: '' }, homeDir: tempHome });
     assert.deepEqual(claude.args, ['-p', '--dangerously-skip-permissions', '--output-format', 'json']);
     assert.equal(claude.stdin, '审计');
-    // 重做轮传 resumeSessionId：续接原会话；非法值忽略。
+    // 全新会话政策（owner 2026-10-09）：重做轮即使带 legacy resumeSessionId 也一律
+    // fresh CLI，绝不生成 --resume/exec resume 续接参数。
     const resumed = buildEvolutionAgentCommand('claude', '重做', {
       env: { PATH: '' }, homeDir: tempHome, resumeSessionId: 'abc123de-f090-4a5b-9c8d-1e2f3a4b5c6d',
     });
-    assert.deepEqual(resumed.args, [
-      '-p', '--dangerously-skip-permissions', '--output-format', 'json',
-      '--resume', 'abc123de-f090-4a5b-9c8d-1e2f3a4b5c6d',
-    ]);
-    const badResume = buildEvolutionAgentCommand('claude', '重做', {
-      env: { PATH: '' }, homeDir: tempHome, resumeSessionId: '../etc/passwd',
+    assert.deepEqual(resumed.args, ['-p', '--dangerously-skip-permissions', '--output-format', 'json']);
+    assert.ok(!resumed.args.includes('--resume') && !resumed.args.some(arg => arg.startsWith('--resume')));
+    const codexResumed = buildEvolutionAgentCommand('codex', '重做', {
+      env: { PATH: '' }, homeDir: tempHome, resumeSessionId: 'abc123de-f090-4a5b-9c8d-1e2f3a4b5c6d',
     });
-    assert.deepEqual(badResume.args, ['-p', '--dangerously-skip-permissions', '--output-format', 'json']);
+    assert.deepEqual(codexResumed.args, ['exec', '--dangerously-bypass-approvals-and-sandbox', '--color', 'never', '-']);
+    assert.ok(!codexResumed.args.some(arg => arg === 'resume' || arg.startsWith('--resume')));
     const codex = buildEvolutionAgentCommand('codex', '审计', { env: { PATH: '' }, homeDir: tempHome });
     assert.deepEqual(codex.args, ['exec', '--dangerously-bypass-approvals-and-sandbox', '--color', 'never', '-']);
     assert.equal(codex.stdin, '审计');
@@ -351,6 +353,7 @@ test('自动进化只继承运行必需环境且 Prompt 不进入命令行', () 
   assert.equal(env.HOME, '/tmp/example-home');
   assert.equal(env.HTTPS_PROXY, 'http://proxy.invalid');
   assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+  assert.equal(env.DISABLE_AUTO_COMPACT, '1');
   assert.equal(env.GIT_CONFIG_KEY_0, 'core.hooksPath');
   assert.match(env.GIT_CONFIG_VALUE_0, /scripts[\\/]evolution-hooks$/);
   assert.equal(env.VSCODE_GIT_IPC_AUTH_TOKEN, undefined);
@@ -524,7 +527,10 @@ test('安全巡检读取脱敏运行问题摘要且不信任外部文案', () =>
 
 test('活动与安全进化共用历史踩坑回归硬门', () => {
   const guardrails = buildEvolutionGuardrails();
-  assert.match(guardrails, /第一项操作必须是从头到尾完整读取 docs\/HANDOFF\.md/);
+  // 全新会话政策（owner 2026-10-09）：完整重读硬门改为有界摘录 + 钉选硬约束 +
+  // 标题锚点按需检索；单 Agent 轮不得再被要求从头读全文。
+  assert.match(guardrails, /执行顺序硬门（全新会话有界上下文）】\n【待协调进程注入当前 HANDOFF 有界摘录】/);
+  assert.match(guardrails, /按标题锚点检索 docs\/HANDOFF\.md 对应章节原文/);
   assert.match(guardrails, /HANDOFF\.md 不只是说明文档，而是回归约束清单/);
   assert.match(guardrails, /禁止恢复整号熔断/);
   assert.match(guardrails, /自己成熟到点 Harvest/);
@@ -541,8 +547,11 @@ test('活动与安全进化共用历史踩坑回归硬门', () => {
   assert.match(guardrails, /严禁执行 git push/);
   // 图标抓取与背包种子闭环硬门（2026-09-11）
   assert.match(guardrails, /npm run fetch:official-icons/);
-  assert.match(guardrails, /抓到的 PNG 属于新增二进制，绝对禁止 git add/);
-  assert.match(guardrails, /待人工提交/);
+  assert.match(guardrails, /主Agent核验来源、原始尺寸、Git blob\/SHA-256和实际图片内容/);
+  assert.match(guardrails, /主Agent完整验收当前HEAD/);
+  assert.match(guardrails, /其他二进制仍拦截，不关闭或绕过隐私扫描/);
+  assert.match(guardrails, /不得把正常资源核验、提交和应用交给用户手工参与/);
+  assert.doesNotMatch(guardrails, /绝对禁止 git add|待人工提交/);
   assert.match(guardrails, /bag_unclassified_item/);
   assert.match(guardrails, /背包种植不是白名单/);
   assert.match(guardrails, /活动 Agent 的每日职责固定为五个闭环/);
@@ -741,23 +750,28 @@ test('飞书进化通知摘要列出提交说明、文件和增删行数', () =>
 });
 
 test('应用进化重启后从 applying 收口为 applied', () => {
-  const result = markEvolutionAppliedAfterRestart({
-    status: 'applying',
-    commit: '1234567890abcdef',
-  });
-  assert.equal(result.changed, true);
-  assert.equal(result.state.status, 'applied');
-  assert.match(result.state.summary, /12345678/);
+  // 新合同：回执未就绪/身份不符绝不冒充 applied（保持 applying 交限时回执确认
+  // 收口）；ready+身份匹配才转 applied（完整闭环行为见 evolution-recovery 用例）。
+  const pending = markEvolutionAppliedAfterRestart({ status: 'applying', commit: '' });
+  assert.equal(pending.changed, false);
+  assert.equal(pending.awaiting, true);
+  assert.equal(pending.state.status, 'applying');
   assert.equal(markEvolutionAppliedAfterRestart({ status: 'pending_apply' }).changed, false);
 });
 
 test('应用进化只复用既有 farm tmux pane', () => {
-  const script = fs.readFileSync(path.join(__dirname, '../../scripts/apply-evolution.sh'), 'utf8');
-  assert.match(script, /FARM_TMUX_TARGET:-farm:0\.0/);
-  assert.match(script, /tmux display-message/);
-  assert.match(script, /tmux send-keys/);
-  assert.doesNotMatch(script, /tmux new(?:-session)?/);
-  assert.doesNotMatch(script, /nohup bash start\.sh/);
+  const shim = fs.readFileSync(path.join(__dirname, '../../scripts/apply-evolution.sh'), 'utf8');
+  const helper = fs.readFileSync(path.join(__dirname, '../scripts/evolution-apply-process.js'), 'utf8');
+  // 薄壳只传参；pane 定位、送键与重启全部在受审 helper 内完成。
+  assert.match(shim, /FARM_TMUX_TARGET:\?missing tmux target/);
+  assert.match(helper, /'display-message', '-p', '-t', target, '#\{pane_pid\}'/);
+  // 字节编码和清行/回车由真实重启行为测试覆盖，静态门只约束目标 pane。
+  assert.match(helper, /'send-keys', '-t', tmuxTarget,/);
+  // 只在原 pane 内启动重启分支：不新建会话/窗口，不向 pane 发中断键。
+  assert.doesNotMatch(helper, /new-session|new-window/);
+  assert.doesNotMatch(helper, /'C-c'/);
+  assert.doesNotMatch(shim, /tmux new(?:-session)?/);
+  assert.doesNotMatch(shim, /nohup bash start\.sh/);
 });
 
 test('自动进化子进程的 Git hook 明确拒绝直接推送', () => {
@@ -819,8 +833,11 @@ test('自动进化暴露下次调度并按完成边界清理短期问题', () =>
   assert.match(source, /nextAutoRunAt/);
   assert.match(source, /pendingRuntimeIssueCount/);
   assert.match(source, /task === 'safety' && outcome === 'no_change'/);
-  assert.match(source, /acknowledgeRuntimeIssues\(next\.runtimeIssueBatch\)/);
-  assert.match(source, /if \(reconciled\.changed\)[\s\S]*acknowledgeRuntimeIssues\(reconciled\.state\.runtimeIssueBatch\)/);
+  // 运行问题批次销账必须被「真实复盘过反馈」闸住：feedbackReviewed + 非 repairOnly
+  // 才允许 acknowledge，启动收口不再无条件销账。
+  assert.match(source, /feedbackReviewed === true[\s\S]{0,400}acknowledgeRuntimeIssues\(next\.runtimeIssueBatch\)/);
+  assert.match(source, /feedbackReviewed === true[\s\S]{0,400}acknowledgeRuntimeIssues\(live\.runtimeIssueBatch\)/);
+  assert.doesNotMatch(source, /acknowledgeRuntimeIssues\(reconciled\.state\.runtimeIssueBatch\)/);
   assert.match(panel, /下次自动进化/);
   assert.match(panel, /待 Agent 复盘的运行问题/);
   assert.match(activityView, /下次自动：/);

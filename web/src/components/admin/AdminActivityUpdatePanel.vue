@@ -130,6 +130,7 @@ const safetyRunning = ref(false)
 const applying = ref(false)
 const syncingHead = ref(false)
 const togglingEvolution = ref(false)
+const togglingAutonomy = ref(false)
 const testingNotify = ref(false)
 const instructionDraft = ref('')
 const instructionSaving = ref(false)
@@ -143,6 +144,7 @@ const EVOLVE_STATUS_LABELS: Record<string, string> = {
   pending_apply: '待确认应用',
   applying: '正在重启应用…',
   applied: '已应用',
+  applied_no_restart: '运行内容一致，无需重启',
   push_failed: 'GitHub 推送失败，禁止应用',
   failed: '执行失败',
   interrupted: '已中止，可重试',
@@ -151,10 +153,30 @@ const EVOLVE_STATUS_LABELS: Record<string, string> = {
   deferred: '有人工改动，已延期',
   privacy_blocked: '隐私检查未通过',
   privacy_blocked_local: '本地改动待检查，已阻止推送',
-  review_blocked: '验收未通过，改动待返工',
+  review_blocked: '任务未完成，草稿已保留',
   no_change: '无需改动',
 }
 const evolveStatusLabel = computed(() => EVOLVE_STATUS_LABELS[evolve.value?.status || ''] || '空闲')
+function completedDate(value?: string) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return ''
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : ''
+}
+const standaloneActivityDate = computed(() => {
+  const state = evolve.value
+  // 独立活动轮在启动时也写日期；未验收的本轮不能冒充已完成记录。
+  if (state?.lastTask === 'activity' && !['', 'idle', 'applied', 'applied_no_restart', 'no_change', 'pending_apply'].includes(state.status || ''))
+    return ''
+  return completedDate(state?.lastEvolveDate)
+})
+const latestActivityReview = computed(() => {
+  const standalone = standaloneActivityDate.value
+  const combined = completedDate(evolve.value?.lastActivityReviewDate)
+  return combined && (!standalone || combined > standalone)
+    ? { date: combined, combined: true }
+    : { date: standalone, combined: false }
+})
 const evolutionBlocked = computed(() => ['running', 'revising', 'pending_apply', 'applying', 'push_failed', 'privacy_blocked_local', 'review_blocked'].includes(evolve.value?.status || ''))
 // 可「拒绝重做」的状态：待应用提交，或被隐私闸门拦截的轮次（可续接原会话修复）
 const redoeableStatus = computed(() => ['pending_apply', 'privacy_blocked', 'privacy_blocked_local'].includes(evolve.value?.status || ''))
@@ -292,6 +314,13 @@ interface ActivityRuleInsight {
 }
 
 const ACTIVITY_RULE_INSIGHT_DEFINITIONS: Array<Omit<ActivityRuleInsight, 'evidence'> & { pattern: RegExp }> = [
+  { key: 'milk-tea-shop', title: '奶茶开店、升级与收银台', description: '已接入奶茶专属面板、摘要与显式查询；开店、改名、升级需确认，收银台可手动领取或开启奶茶自动领奖后在满额时领取。', kind: 'gameplay', pattern: /开店营业|升级小店|收银台/ },
+  { key: 'milk-tea-workshop', title: '奶茶工坊与果实加工', description: '已接入配方与背包果实显式查询、唯一条目和锁定校验；本期七种普通森野作物单格、黄金芽四格和种子、果实专属图已核验；真正未登记的作物仍保留未知占地。', kind: 'gameplay', pattern: /种植加工|奶茶工坊/ },
+  { key: 'milk-tea-hire', title: '雇佣、特长、班次与互动', description: '已接入候选、店铺空槽和我的工作显式查询；逐项费用确认与操作前资格重读，部分失败据实报告。', kind: 'gameplay', pattern: /雇佣好友|每班.*互动/ },
+  { key: 'milk-tea-sales', title: '宣传喇叭、好友排行与销量日志', description: '已接入喇叭手动确认、指定页排行和指定日销量查询；不轮询、不自动翻页。', kind: 'gameplay', pattern: /宣传加速|宣传喇叭|排行榜|销量日志/ },
+  { key: 'milk-tea-fund', title: '成长基金与快乐值奖励', description: '已接入已解锁基金、每日快乐值、首次分享与档位领取；奶茶自动领奖独立开关可领取合格快乐值奖励，基金付费解锁及好友链接仍在官方客户端完成。', kind: 'gameplay', pattern: /成长基金|累计快乐值|人气装饰/ },
+  { key: 'milk-tea-end', title: '奶茶营业期、结算期与最终截止', description: '结算期停止营业动作和专属种子购买；最终截止后停止新增玩法读取与写入，页面到期零网络撤下。奶茶自动领奖按新查询确认收银台满额后领取；预计时间只用于到点复查。', kind: 'warning', pattern: /48小时结算期|未领收益通过邮件补发|停止自动营业/ },
+
   { key: 'bear-grow', title: '比熊领养与投喂成长', description: '已接入流程卡；投喂、领养与领取永久比熊已开放面板手动操作，成长进度实时状态当前快照未展示、由操作前校验读取，元气糕库存随背包读取展示。', kind: 'gameplay', pattern: /投喂.*培育比熊|投喂.*比熊幼崽/ },
   { key: 'bear-care', title: '看护与比熊变异', description: '已接入看护条件；商城与玩法说明的产量/售价差异单独提示，当前看护状态待确认。', kind: 'gameplay', pattern: /比熊处于看护状态/ },
   { key: 'bear-treasure', title: '成年寻宝', description: '已接入消耗与奖励关系；寻宝已开放面板手动操作，剩余次数与单次消耗由操作前校验读取、当前快照未展示，元气糕库存随背包读取展示。', kind: 'gameplay', pattern: /寻宝玩法/ },
@@ -574,6 +603,25 @@ async function toggleEvolutionEnabled() {
   }
 }
 
+async function toggleAutonomousEvolution() {
+  togglingAutonomy.value = true
+  error.value = ''
+  try {
+    const next = evolve.value?.autonomousEvolutionEnabled !== true
+    const { data } = await api.post('/api/activity/update/autonomous-evolution', { enabled: next })
+    if (!data.ok)
+      throw new Error(data.error || '切换失败')
+    syncEvolveState(data.evolve)
+    toast.success(next ? '自主进化已开启：失败自动返工、验收通过自动应用' : '自主进化已关闭：恢复人工确认应用')
+  }
+  catch (err: any) {
+    error.value = err?.response?.data?.error || err.message || '切换失败'
+  }
+  finally {
+    togglingAutonomy.value = false
+  }
+}
+
 async function syncEvolutionHead() {
   syncingHead.value = true
   error.value = ''
@@ -600,7 +648,7 @@ async function applyEvolve() {
     if (!data.ok)
       throw new Error(data.error || '应用进化失败')
     syncEvolveState(data.evolve)
-    toast.warning('正在重启应用进化，面板稍等片刻恢复')
+    toast.warning('正在应用进化，面板将显示实际应用结果')
   }
   catch (err: any) {
     error.value = err?.response?.data?.error || err.message || '应用进化失败'
@@ -699,7 +747,7 @@ onUnmounted(() => evolutionStore.stopPolling())
             自动进化（活动 + 防封安全巡检）
           </h4>
           <p class="mt-1 text-xs text-purple-700/90 dark:text-purple-300/90">
-            每天北京时间 00:00-01:00 最多自动启动一轮，合并安全巡检和缓存活动核对。子 Agent 初检与实施，主 Agent 确认方案和最终验收；协调进程执行真实测试及批准的反向对照。完成后由你点「应用进化」生效。
+            每天北京时间 00:00-01:00 合并巡检一次；自主开启后，新活动空闲时立即进化。主 Agent 持续统筹，子 Agent 首次实施后，由主 Agent 自行修正并反复验证，每轮保存失败原因、改动与剩余问题；验收通过先通知，再按自主设置应用。{{ evolve?.autonomousEvolutionEnabled === true ? '完成的改动会自动应用，就绪后再确认。' : '验收通过后由你点「应用进化」生效。' }}
           </p>
         </div>
         <button
@@ -778,6 +826,12 @@ onUnmounted(() => evolutionStore.stopPolling())
             状态：{{ evolveStatusLabel }}
             <span v-if="evolve?.commit">（提交 {{ String(evolve.commit).slice(0, 8) }}）</span>
           </div>
+          <div v-if="evolve?.runningCommit" class="mt-1 text-xs text-purple-800 dark:text-purple-300">
+            实际运行：{{ evolve.runningCommit.slice(0, 8) }} · PID {{ evolve.runningPid }}
+          </div>
+          <p v-if="evolve?.applyDeferredReason && evolve.status === 'pending_apply'" class="mt-1 text-xs text-amber-700">
+            {{ evolve.applyDeferredReason }}
+          </p>
           <p v-if="evolve?.summary" class="mt-1 text-xs break-all text-purple-700 dark:text-purple-300">
             {{ evolve.summary }}
           </p>
@@ -796,12 +850,14 @@ onUnmounted(() => evolutionStore.stopPolling())
             活动进化
           </div>
           <div class="mt-1 text-xs text-purple-800 dark:text-purple-300">
-            上次：{{ evolve?.lastEvolveDate || evolve?.lastActivityReviewDate || '未跑' }}
+            最近完成：{{ latestActivityReview.date || '尚未完成' }}
             <span
-              v-if="!evolve?.lastEvolveDate && evolve?.lastActivityReviewDate"
+              v-if="latestActivityReview.date"
               class="text-purple-500 dark:text-purple-400"
-              title="每日 00:00-01:00 的自动综合巡检已合并复核活动侧（安全巡检 + 活动增量 + GitHub 公开对照）；只有独立活动轮才更新该字段"
-            >（含每日综合巡检）</span>
+            >{{ latestActivityReview.combined ? '（综合巡检含活动复核）' : '（独立活动进化）' }}</span>
+          </div>
+          <div v-if="latestActivityReview.combined && standaloneActivityDate" class="mt-1 text-xs text-purple-500 dark:text-purple-400">
+            上次独立活动进化：{{ standaloneActivityDate }}
           </div>
           <div class="mt-2 flex flex-wrap gap-2">
             <button
@@ -828,13 +884,13 @@ onUnmounted(() => evolutionStore.stopPolling())
           :disabled="evolve?.status !== 'pending_apply'"
           @click="applyEvolve"
         >
-          {{ applying ? '正在重启…' : '应用进化（重启生效）' }}
+          {{ applying ? '正在应用…' : '应用进化' }}
         </button>
         <button
           v-if="evolve?.status === 'review_blocked'"
           class="ml-2 rounded bg-purple-600 px-3 py-1.5 text-xs text-white transition hover:bg-purple-700 disabled:opacity-50"
           :disabled="reviewRetrying"
-          title="验收未通过轮的人工重试：从当前基线重开一轮综合巡检（安全巡检 + 缓存活动增量）。需先处理并提交工作区改动并与远端同步，后端仍会最终检查"
+          title="继续处理未完成任务。主 Agent 模式沿用原合同、草稿和批次；其他旧记录从当前基线复核，后端检查工作区、检查点和发布条件"
           @click="retryReviewBlocked"
         >
           {{ reviewRetrying ? '重试启动中…' : '重新验收并重试' }}
@@ -858,6 +914,24 @@ onUnmounted(() => evolutionStore.stopPolling())
         >
           {{ togglingEvolution ? '切换中…' : (evolve?.evolutionEnabled === false ? '自进化：关' : '自进化：开') }}
         </button>
+        <button
+          class="ml-2 rounded px-3 py-1.5 text-xs transition disabled:opacity-50"
+          :class="evolve?.autonomousEvolutionEnabled === true
+            ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+            : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-400'"
+          :disabled="togglingAutonomy"
+          :title="evolve?.autonomousEvolutionEnabled === true
+            ? '自主进化运行中：失败自动返工，通过的改动自动应用，运行内容一致时保留当前连接；点击关闭恢复人工确认应用'
+            : '自主进化已关闭，点击开启：通过的改动自动应用生效、失败自动返工重试（默认关闭）'"
+          @click="toggleAutonomousEvolution"
+        >
+          {{ togglingAutonomy ? '切换中…' : (evolve?.autonomousEvolutionEnabled === true ? '自主进化：开' : '自主进化：关') }}
+        </button>
+        <span
+          v-if="evolve?.autonomousEvolutionEnabled === true && evolve?.autonomy?.nextReworkAt"
+          class="ml-1 text-xs text-emerald-700 dark:text-emerald-300"
+          title="自主进化下一次自动重试/应用时刻（失败按间隔递增退避）"
+        >下次自动处理 {{ formatTime(evolve.autonomy.nextReworkAt) }}</span>
       </div>
     </div>
 
@@ -942,7 +1016,7 @@ onUnmounted(() => evolutionStore.stopPolling())
       >
         <h4 class="font-semibold">活动适配复核</h4>
         <p class="mt-2 text-sm">
-          本次新活动候选组 {{ candidateGroupCount }} 个，当前已登记活动复核 {{ currentReviewGroupCount }} 个。活动说明用于识别玩法和 UI 要求，写操作仍必须等待官方客户端真实调用证据。
+          本次新活动候选组 {{ candidateGroupCount }} 个，当前已登记活动复核 {{ currentReviewGroupCount }} 个。活动说明用于识别玩法和 UI 要求，操作按已证编码和当前状态核验；免费奖励自动领取另核对资格、时机和重复保护，不以实际领取制造自然成功样本。
         </p>
         <div class="mt-3 space-y-2">
           <div v-for="group in discoveredGroups" :key="group.id" class="rounded-lg bg-white/70 px-3 py-2 dark:bg-gray-900/40">

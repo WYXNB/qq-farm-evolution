@@ -42,6 +42,7 @@ const ISSUE_DEFINITIONS = Object.freeze({
   // 背包出现本地索引未登记物品（新活动种子/道具）：日志签名变化时上报。
   // 自动进化每天只在固定窗口跑一轮，当日新增未识别 ID 靠这里进待办，不被假清零。
   bag_unclassified: { severity: 'warn', label: '背包出现本地索引未登记的物品（新活动种子/道具待登记）' },
+  bag_seed_mapping: { severity: 'warn', label: '背包已识别种子缺少植物映射或占地证据，需继续活动种子进化' },
 });
 
 function normalizeIssue(value) {

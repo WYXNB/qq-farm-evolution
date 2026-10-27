@@ -33,7 +33,10 @@ function normalizeBaselineChecks(value) {
                 || new Set(input).size !== input.length) throw fail('invalid_checks');
             return [...input].sort();
         };
-        const sourceFiles = files(check.sourceFiles, 12, /^(?:core|web)\/src\/.+\.\w+$/);
+        // The native coordinator is also a production entry. Keep this exact
+        // script eligible for isolated behavior comparisons; reporter and other
+        // execution-control scripts remain outside the replacement boundary.
+        const sourceFiles = files(check.sourceFiles, 12, /^(?:(?:core|web)\/src\/.+\.\w+|core\/scripts\/run-evolution-team\.js)$/);
         if (sourceFiles.some(file => /\/(?:tests?|__tests__)\/|\.(?:test|spec)\.[^.]+$/.test(file))) throw fail('invalid_checks');
         const testFiles = files(check.testFiles, 8, /^core\/test\/[^/]+\.test\.js$/);
         if (!Number.isInteger(check.minFailures) || check.minFailures < 1 || check.minFailures > 100) throw fail('invalid_checks');

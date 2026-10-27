@@ -94,6 +94,12 @@ function harness(t, options = {}) {
     module, exports: module.exports, __dirname: path.dirname(SOURCE_FILE), __filename: SOURCE_FILE,
     Buffer, Date: Clock, URL, console, crypto, process,
     require: (name) => {
+      if (name === './evolution-publish') return {
+        ...sourceRequire(name),
+        ensureHoldManifest() { throw new Error('isolated_legacy_fixture'); },
+        ownerStorageRoot: (_dataDir, root) => root,
+        createTaskWorkspace() { throw new Error('isolated_legacy_fixture'); },
+      };
       if (name === '../config/runtime-paths') return { getDataFile: file => path.join(dataDir, file) };
       if (name === './logger') return { createModuleLogger: () => logger };
       if (name === './scheduler') return { createScheduler: () => fakeScheduler, getSchedulerRegistrySnapshot: () => [] };
@@ -107,6 +113,11 @@ function harness(t, options = {}) {
             if (cmd === 'git' && args[0] === 'rev-parse') {
               if (args[1] === 'origin/main') return `${git.originMain}\n`;
               if (args[1] === 'HEAD') return `${git.head}\n`;
+            }
+            // launch 信任脏树门走 worktreeChangeFiles（porcelain -z / NUL 分隔）：
+            // 与 execSync 的可读 porcelain 同源，这里按 -z 约定转换。
+            if (cmd === 'git' && args[0] === 'status') {
+              return git.dirty ? `${git.dirty.split('\n').join('\0')}\0` : '';
             }
             throw new Error(`Unexpected execFileSync: ${cmd} ${args && args.join(' ')}`);
           },
@@ -130,6 +141,50 @@ module.exports.testAccess = {
     catch { return null; }
   } };
 }
+
+test('main-owned manual recovery retains the activity checkpoint, original plan and captured batches', (t) => {
+  const launches = [];
+  const checkpoint = { version: 1, kind: 'in_run', baselineHead: HEAD,
+    allowedFiles: ['core/src/services/activity.js'], approvedScope: ['core/src/services/activity.js'],
+    acceptanceChecks: ['preserve the approved activity behavior'], baselineChecks: [],
+    taskIdentity: { task: 'activity', promptDigest: 'a'.repeat(64), feedbackThroughAt: NOW - 1,
+      activityPlanDigest: 'b'.repeat(64), githubBatchDigest: 'c'.repeat(64), quotaDate: '2026-09-26',
+      automatic: true, combinedDaily: false },
+    completed: [{ phase: 'plan', decision: 'approve', summary: 'selected implementation' }],
+    worktreeFingerprint: 'd'.repeat(64), fileFingerprints: {},
+  };
+  const state = { ...REVIEW_BLOCKED_BASE(), lastTask: 'activity', lastRunAutomatic: true,
+    feedbackBatch: { throughAt: NOW - 1 },
+    collaboration: { ...REVIEW_BLOCKED_BASE().collaboration, orchestration: 'main-owned', checkpoint },
+    autonomy: { originalPrompt: 'original task', activityPlan: {
+      newUnknown: [71], newEnded: [81], reviewIds: [], fingerprint: 'e'.repeat(64) } },
+  };
+  const f = harness(t, { state, deps: { launchEvolution: (task, payload) => {
+    launches.push({ task, payload }); return { ok: true };
+  } } });
+  assert.equal(f.service.retryReviewBlockedEvolution().ok, true);
+  assert.equal(launches.length, 1);
+  const { task, payload } = launches[0];
+  assert.equal(task, 'activity');
+  assert.equal(payload.resume, 'checkpoint');
+  assert.equal(payload.preserveFeedbackBatch, true);
+  assert.equal(payload.automatic, true);
+  assert.equal(payload.combinedDaily, false);
+  assert.deepEqual(Array.from(payload.newUnknown), [71]);
+  assert.deepEqual(Array.from(payload.newEnded), [81]);
+  assert.equal(f.readRaw().lastAutomaticEvolveDate, state.lastAutomaticEvolveDate);
+  assert.equal(f.readRaw().feedbackBatch.throughAt, NOW - 1);
+});
+
+test('an invalid main-owned checkpoint never falls back to a new unrelated task', (t) => {
+  const launches = [];
+  const f = harness(t, { state: { ...REVIEW_BLOCKED_BASE(), lastTask: 'activity',
+    collaboration: { ...REVIEW_BLOCKED_BASE().collaboration, orchestration: 'main-owned', checkpoint: null } },
+  deps: { launchEvolution: (...args) => { launches.push(args); return { ok: true }; } } });
+  assert.equal(f.service.retryReviewBlockedEvolution().reason, 'checkpoint_unverified');
+  assert.equal(launches.length, 0);
+  assert.equal(f.readRaw().status, 'review_blocked');
+});
 
 test('review_blocked 且干净同步：真实 launchEvolution 启动新轮综合巡检', (t) => {
   const f = harness(t, { state: REVIEW_BLOCKED_BASE() });

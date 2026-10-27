@@ -149,9 +149,15 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
       const bag = await provider.getBag(account.id);
       if (bag?.seedRecognition) seedRecognition = bag.seedRecognition;
     } catch { /* 无库存证据不等于没有识别缺口。 */ }
+    let festivalCalendar = null;
+    if (typeof provider.getSolarCalendar === 'function') {
+      try { festivalCalendar = { available: true, ...await provider.getSolarCalendar(account.id) }; }
+      catch { festivalCalendar = { available: false, error: '节日签到读取失败，不能据此认定没有活动' }; }
+    }
     return {
       available: true,
       seedRecognition,
+      festivalCalendar,
       accountName: account.name || account.nick || '在线账号',
       scannedAt: Date.now(),
       activities,
@@ -171,10 +177,14 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
     knownActivityIds,
     onlineScanner: scanOnlineActivities,
     localScanEnabled: String(process.env.ACTIVITY_LOCAL_SCAN_ENABLED || '').toLowerCase() === 'true',
-    // 每次扫描后把报告交给进化服务：发现新活动/活动结束时每日最多触发一次代码进化
+    // 每次扫描登记新/结束活动；自主开启时空闲后立即进化，同批去重，不占每日名额。
     onReport: report => activityEvolver.checkAndMaybeEvolve(report),
   });
-  activityEvolver.startActivityEvolver({ store });
+  activityEvolver.startActivityEvolver({ store,
+    prepareWxRestart: input => provider?.prepareWxRestart?.(input),
+    validateWxRestart: async handoff => await provider?.validateWxRestart?.(handoff) === true,
+    cancelWxRestart: input => provider?.cancelWxRestart?.(input),
+  });
 
   app.get('/api/activity/update/status', requireAdminToken, (req, res) => {
     res.json({
@@ -259,16 +269,28 @@ function registerAdminActivityUpdateRoutes({ app, provider, store, requireAdminT
     res.json({ ok: true, ...result, evolve: activityEvolver.getEvolveState() });
   });
 
+  // 自主进化开关（默认关闭）：开启后待应用自动应用（严格同提交 + 远端实测 + 主
+  // Agent 批准凭据）、失败/验收未通过按退避自动返工、repairOnly 应用后自动续接
+  // 原任务；关闭立即撤定时器并恢复人工确认应用。
+  app.post('/api/activity/update/autonomous-evolution', requireAdminToken, requireEvolutionConfigAdmin, (req, res) => {
+    const result = activityEvolver.setAutonomousEvolution(req.body?.enabled === true);
+    res.json({ ok: true, ...result, evolve: activityEvolver.getEvolveState() });
+  });
+
   // 面板手动同步待应用提交到当前 HEAD（本地推进后 web 不知道导致无法应用的自助修复）
   app.post('/api/activity/update/sync-head', requireAdminToken, (req, res) => {
     const result = activityEvolver.syncEvolutionHead();
     res.json({ ok: result.ok, ...result, evolve: activityEvolver.getEvolveState() });
   });
 
-  app.post('/api/activity/update/apply', requireAdminToken, (req, res) => {
-    const result = activityEvolver.applyEvolution();
-    if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
-    res.json({ ok: true, evolve: activityEvolver.getEvolveState() });
+  app.post('/api/activity/update/apply', requireAdminToken, async (req, res) => {
+    try {
+      const result = await activityEvolver.applyEvolution();
+      if (!result.ok) return res.status(400).json({ ok: false, error: result.error });
+      return res.json({ ok: true, evolve: activityEvolver.getEvolveState() });
+    } catch {
+      return res.status(500).json({ ok: false, error: '应用准备失败，当前服务保持运行' });
+    }
   });
 }
 
