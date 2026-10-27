@@ -29,21 +29,21 @@ function fixture(t) {
         persisted: () => fs.readFileSync(path.join(dataDir, 'evolution-references.json'), 'utf8') };
 }
 
-test('checks privately configured seeds and six broad query groups, deduplicates and records metadata without claiming review', async (t) => {
+test('checks privately configured seeds and seven query groups with a recent starred search, deduplicates and records metadata without claiming review', async (t) => {
     const f = fixture(t);
     const result = await collectPublicReferences(f.options);
     assert.equal(result.state, 'complete');
     assert.equal(result.discoveryComplete, true);
-    assert.equal(result.queriesSucceeded, 6);
+    assert.equal(result.queriesSucceeded, 7);
     assert.equal(result.candidateCount, 4);
     assert.deepEqual(result.newCandidates, ['sample/qq-farm-bot']);
     assert.deepEqual(f.calls.slice(0, 6), SEEDS.flatMap(name => [`/repos/${name}`, `/repos/${name}/commits?per_page=20`]));
     const searches = f.calls.filter(value => value.startsWith('/search/'));
-    assert.equal(new Set(searches).size, 6);
+    assert.equal(new Set(searches).size, 7);
     assert.equal(searches.filter(value => value.includes('sort=stars')).length, 0);
-    assert.equal(searches.filter(value => value.includes('sort=updated')).length, 6);
+    assert.equal(searches.filter(value => value.includes('sort=updated')).length, 7);
     assert.equal(searches.every(value => value.endsWith('per_page=10')), true);
-    assert.equal(f.calls.length, 13);
+    assert.equal(f.calls.length, 14);
     assert.equal(result.candidates.every(item => /^[a-f\d]{40}$/.test(item.sha)), true);
     assert.doesNotMatch(f.persisted(), /reviewed|https?:|description|full_name|README/i);
     assert.equal(fs.statSync(path.join(f.dataDir, 'evolution-references.json')).mode & 0o777, 0o600);
@@ -53,16 +53,16 @@ test('same-day success is reused, but next-day searches find new repositories an
     const f = fixture(t);
     await collectPublicReferences(f.options);
     assert.equal((await collectPublicReferences({ ...f.options, now: NOW + 1000 })).cached, true);
-    assert.equal(f.calls.length, 13);
+    assert.equal(f.calls.length, 14);
     f.setItems([metadata('sample/qq-farm-bot'), metadata('new-project/qq-farm')]);
     f.setRevision('b'.repeat(40));
     const second = await collectPublicReferences({ ...f.options, now: NOW + DAY });
     assert.equal(second.cached, false);
     assert.deepEqual(second.newCandidates, ['new-project/qq-farm']);
     assert.deepEqual(second.changedCandidates.sort(), [...SEEDS, 'sample/qq-farm-bot'].sort());
-    assert.equal(f.calls.filter(value => value.startsWith('/search/')).length, 12);
+    assert.equal(f.calls.filter(value => value.startsWith('/search/')).length, 14);
     const third = await collectPublicReferences({ ...f.options, now: NOW + 2 * DAY });
-    assert.equal(third.queriesSucceeded, 6);
+    assert.equal(third.queriesSucceeded, 7);
     assert.deepEqual(third.changedCandidates, []);
     assert.deepEqual(third.newCandidates, []);
 });
@@ -95,7 +95,7 @@ test('timeouts and malformed responses remain partial and never store original e
     } });
     assert.equal(result.state, 'partial');
     assert.equal(result.failureReason, 'timeout');
-    assert.equal(result.queriesSucceeded, 5);
+    assert.equal(result.queriesSucceeded, 6);
     const next = await collectPublicReferences({ ...f.options, now: NOW + DAY,
         request: async () => ({ statusCode: 302, body: { location: 'private-redirect' } }) });
     assert.equal(next.state, 'unavailable');
@@ -149,7 +149,7 @@ test('large result sets remain bounded to 40 candidates, bounded recent history 
     const result = await collectPublicReferences({ ...f.options, request });
     assert.equal(result.candidateCount, 40);
     assert.equal(result.candidates.length, 40);
-    assert.equal(f.calls.filter(value => value.includes('/commits?')).length, 15);
+    assert.equal(f.calls.filter(value => value.includes('/commits?')).length, 14);
     assert.equal(f.calls.length <= 24, true);
     assert.equal(f.calls.length, 24);
 });
@@ -270,4 +270,22 @@ test('old policy records refresh even on the same day while their known sources 
     const result = await collectPublicReferences(f.options);
     assert.equal(result.cached, false);
     assert.deepEqual(result.newCandidates, []);
+});
+
+
+test('recent >20-star references get history budget before newer low-star forks while broad discovery remains', async (t) => {
+    const f = fixture(t);
+    f.setItems([
+        metadata('popular/qq-farm', { stargazers_count: 21, pushed_at: '2026-01-04T00:00:00Z' }),
+        metadata('new-fork/qq-farm', { stargazers_count: 20, pushed_at: '2026-01-05T00:00:00Z' }),
+        metadata('popular-new/qq-farm', { stargazers_count: 50, pushed_at: '2026-01-05T00:00:00Z' }),
+    ]);
+    const result = await collectPublicReferences(f.options);
+    const searches = f.calls.filter(value => value.startsWith('/search/'));
+    assert.match(decodeURIComponent(searches[0]), /q=qq-farm stars:>20&sort=updated&order=desc/);
+    assert.ok(searches.some(value => decodeURIComponent(value).includes('q=qq-farm&')));
+    const histories = f.calls.filter(value => value.includes('/commits?')).slice(SEEDS.length);
+    assert.deepEqual(histories.map(value => value.split('/')[2]), ['popular-new', 'popular', 'new-fork']);
+    assert.deepEqual(result.candidates.slice(SEEDS.length).map(value => value.ownerRepo), ['popular-new/qq-farm', 'popular/qq-farm', 'new-fork/qq-farm']);
+    assert.equal(f.calls.length <= 24, true);
 });

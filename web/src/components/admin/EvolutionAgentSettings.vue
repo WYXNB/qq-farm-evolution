@@ -35,6 +35,8 @@ function agentDisplayName(agent: string) {
 }
 
 const phaseText = computed(() => {
+  if (evolutionStore.evolve?.status === 'applied_no_restart')
+    return '已完成应用，运行内容一致，当前连接保留'
   const collab = evolutionStore.collaboration
   if (collab) {
     const phase = collab.repairOnly && collab.status === 'completed'

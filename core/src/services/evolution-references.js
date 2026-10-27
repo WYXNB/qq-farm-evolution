@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const { readPrivateConfig } = require('./private-config');
 const VERSION = 2;
 const HISTORY_SIZE = 20;
-const QUERIES = ['qq-farm', 'qq-farm-bot', 'QQ农场', 'qq farm', '农场助手', 'nqf'];
+const QUERIES = ['qq-farm stars:>20', 'qq-farm', 'qq-farm-bot', 'QQ农场', 'qq farm', '农场助手', 'nqf'];
 const FILE = 'evolution-references.json';
 const MAX_REQUESTS = 24;
 const MAX_BYTES = 512 * 1024;
@@ -153,6 +153,14 @@ function relevant(value) {
     return /qq.*farm|farm.*qq|nqf|农场/i.test(name) || /qq\s*农场|qq[ -]*farm/i.test(description);
 }
 
+// Owner preference: recently updated projects with >20 stars get the bounded
+// code-history budget first. Small/new projects remain discoverable.
+function compareReferences(a, b) {
+    return Number(b.stars > 20) - Number(a.stars > 20)
+        || b.updatedAt.localeCompare(a.updatedAt)
+        || (b.recentCommits || 0) - (a.recentCommits || 0) || b.stars - a.stars;
+}
+
 /** request(path, {signal}) returns {statusCode, body}; injected requests must not retain private data. */
 async function collectPublicReferences({ dataDir, now = Date.now(), request = publicRequest }) {
     const seeds = referenceSeeds(dataDir);
@@ -219,14 +227,14 @@ async function collectPublicReferences({ dataDir, now = Date.now(), request = pu
                 found.set(clean.ownerRepo, clean);
                 if (found.size > 40) {
                     const oldest = [...found.values()].filter(item => !seeds.includes(item.ownerRepo))
-                        .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.stars - b.stars)[0];
+                        .sort(compareReferences).at(-1);
                     found.delete(oldest.ownerRepo);
                 }
             }
         }
     }
     const extra = [...found.values()].filter(item => !seeds.includes(item.ownerRepo))
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || (b.recentCommits || 0) - (a.recentCommits || 0) || b.stars - a.stars);
+        .sort(compareReferences);
     for (const item of extra.slice(0, Math.max(0, MAX_REQUESTS - calls))) {
         if (stopped) break;
         const commits = await get(`/repos/${item.ownerRepo}/commits?per_page=${HISTORY_SIZE}`);
@@ -234,7 +242,7 @@ async function collectPublicReferences({ dataDir, now = Date.now(), request = pu
         Object.assign(item, activitySample(commits, now));
         if (!item.sha && !stopped && record.failureReason === 'none') record.failureReason = 'invalid_response';
     }
-    extra.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || (b.recentCommits || 0) - (a.recentCommits || 0) || b.stars - a.stars);
+    extra.sort(compareReferences);
     record.candidates = [...seeds.map(name => found.get(name)).filter(Boolean), ...extra];
     record.candidates = record.candidates.map(candidate).filter(Boolean);
     record.newCandidates = extra.filter(item => !seen.has(item.ownerRepo)).map(item => item.ownerRepo);

@@ -328,7 +328,8 @@ test('面板：review_blocked 显示「重新验收并重试」，点击直发 e
   const retryButton = buttonsOf(root).find(node => textOf(node).includes('重新验收并重试'));
   assert.ok(retryButton, 'review_blocked 下应渲染重试按钮');
   assert.equal(retryButton.props.disabled, false);
-  assert.match(String(retryButton.props.title || ''), /需先处理并提交工作区改动/, '应提示先处理工作区');
+  assert.match(String(retryButton.props.title || ''), /主 Agent 模式沿用原合同、草稿和批次/, '应说明主模式保留未完成任务的合同与草稿');
+  assert.match(String(retryButton.props.title || ''), /后端检查工作区、检查点和发布条件/, '重试仍由后端核验真实条件');
 
   click(retryButton);
   await waitFor(() => api.calls.post.some(call => call.url === '/api/activity/update/evolve-retry'), '发出重试请求');

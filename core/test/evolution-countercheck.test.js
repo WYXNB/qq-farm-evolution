@@ -62,6 +62,16 @@ test('normalizes bounded explicit scopes and preserves optional compatibility', 
     assert.throws(() => normalizeBaselineChecks([{ ...SPEC, testFiles: ['core/test/sub/value.test.js'] }]), { code: 'EVOLUTION_COUNTERCHECK_INVALID_CHECKS' });
 });
 
+test('native coordinator comparisons admit the production entry and reject unrelated execution scripts', () => {
+    const coordinator = { ...SPEC, sourceFiles: ['core/scripts/run-evolution-team.js'] };
+    assert.deepEqual(normalizeBaselineChecks([coordinator]), [coordinator]);
+    for (const file of ['core/scripts/countercheck-reporter.cjs', 'core/scripts/evolution-apply-process.js',
+        'core/scripts/run-evolution-main-mcp.js', 'core/scripts/run-evolution-team.js/child.js']) {
+        assert.throws(() => normalizeBaselineChecks([{ ...SPEC, sourceFiles: [file] }]),
+            { code: 'EVOLUTION_COUNTERCHECK_INVALID_CHECKS' });
+    }
+});
+
 test('executes real current and old behavior, retaining only safe evidence and leaving the worktree untouched', async (t) => {
     const f = fixture(t);
     const before = f.git(['diff', '--binary']);
