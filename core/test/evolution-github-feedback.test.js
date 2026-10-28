@@ -557,7 +557,7 @@ test('批次：不可变快照落盘、失败显式 incomplete、摘要不含正
   assert.equal(feedback.buildGithubFeedbackSection(null), '');
 });
 
-test('公开回复模板：完整更新步骤 + 可点击自有 README 锚点，无诊断/测试/Star 推广', () => {
+test('公开回复模板：保留更新步骤和 README 锚点，正文末尾追加 Star 支持文案', () => {
   const entry = { issue: ISSUE, revision: REV, detail: { cause: 'SyntheticPrivateAlias', change: '私有诊断 test/private-diagnostic.test.js' } };
   const cfg = feedback.readGithubFeedbackConfig({ config: makeConfig({
     publicActions: ['git_pull', 'docker_compose'], readmeAnchors: ['-快速开始', '常见问题'], extraNote: '更新后重启面板即可',
@@ -567,6 +567,10 @@ test('公开回复模板：完整更新步骤 + 可点击自有 README 锚点，
   assert.doesNotMatch(reply, /SyntheticPrivateAlias|私有诊断|private-diagnostic/);
   assert.match(reply, /请更新后重试。/);
   assert.match(reply, /如果遇到其他问题，欢迎继续反馈！/);
+  const footer = '如果觉得这个项目对你有帮助，欢迎点个 Star ⭐，谢谢支持！';
+  const marker = feedback.deliveryMarker(ISSUE, REV);
+  assert.ok(reply.slice(0, -marker.length).trimEnd().endsWith(footer), '支持文案是正文最后一句');
+  assert.equal(reply.split(footer).length - 1, 1, '支持文案只追加一次');
   assert.ok(reply.includes(`git pull --ff-only https://github.com/${REPO}.git main`), '完整拉取命令带自有仓库');
   assert.ok(reply.includes('pnpm install --frozen-lockfile'), '源码路径含依赖安装');
   assert.ok(reply.includes('pnpm build:web'), '源码路径含前端构建');
@@ -576,11 +580,12 @@ test('公开回复模板：完整更新步骤 + 可点击自有 README 锚点，
   assert.ok(reply.includes('[常见问题](https://github.com/owner/example-farm#常见问题)'));
   assert.ok(reply.includes('- 更新后重启面板即可'));
   assert.ok(reply.endsWith(feedback.deliveryMarker(ISSUE, REV)));
-  assert.doesNotMatch(reply, /诊断|测试通过|代码改动|Star/);
+  assert.doesNotMatch(reply, /诊断|测试通过|代码改动/);
   assert.doesNotMatch(reply, /https?:\/\/(?!github\.com\/owner\/example-farm)/, '除自有 README 外无任何链接');
 
   const sourceOnly = feedback.buildPublicReply(feedback.readGithubFeedbackConfig({ config: makeConfig() }), entry);
   assert.doesNotMatch(sourceOnly, /docker/);
+  assert.ok(sourceOnly.slice(0, -marker.length).trimEnd().endsWith(footer));
 });
 
 test('发件箱入队幂等且校验 revision/指纹；仓库身份钉死（配置切换不改投）', async (t) => {

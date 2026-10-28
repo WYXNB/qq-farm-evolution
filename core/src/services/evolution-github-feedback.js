@@ -750,7 +750,9 @@ function buildPublicReply(cfg, entry) {
     lines.push(`- 使用说明：${readmeAnchorLinks(cfg)}`);
   }
   if (cfg.extraNote) lines.push(`- ${cfg.extraNote}`);
-  lines.push('', '如果遇到其他问题，欢迎继续反馈！', '', deliveryMarker(entry.issue, entry.revision));
+  lines.push('', '如果遇到其他问题，欢迎继续反馈！', '',
+    '如果觉得这个项目对你有帮助，欢迎点个 Star ⭐，谢谢支持！',
+    '', deliveryMarker(entry.issue, entry.revision));
   return lines.join('\n');
 }
 
